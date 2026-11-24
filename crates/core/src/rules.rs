@@ -139,6 +139,14 @@ pub const OLD_INSTALLER_DAYS: u64 = 30;
 /// Owner decision 4: temp files changed within this many hours are not offered.
 pub const FRESH_TEMP_HOURS: u64 = 24;
 
+/// Duplicates smaller than this are not offered: they free little and would mean hashing
+/// thousands of small files (ByteBroom's default, not an owner decision; easy to change).
+pub const DUPLICATE_MIN_BYTES: u64 = 1024 * 1024;
+/// Duplicates are first told apart by a hash of this many bytes from the start of each file.
+pub const DUPLICATE_HEAD_BYTES: usize = 64 * 1024;
+/// Folder names that hold build output in code projects.
+pub const BUILD_FOLDER_NAMES: [&str; 5] = ["node_modules", "target", "bin", "obj", "dist"];
+
 /// Folders that are never listed, wherever they are (matched ignoring ASCII case).
 pub const NEVER_LISTED_FOLDERS: [&str; 2] = [".ssh", ".gnupg"];
 /// File names that are never listed: wallets and the browser files that hold logins, cookies,
@@ -376,7 +384,7 @@ pub static RULES: [Rule; 19] = [
         tier: Tier::Amber,
         look: Look::Search {
             areas: &[Base::Profile, Base::OtherDrives],
-            find: Find::BuildFolders(&["node_modules", "target", "bin", "obj", "dist"]),
+            find: Find::BuildFolders(&BUILD_FOLDER_NAMES),
         },
         fresh_hours: 0,
     },
@@ -692,6 +700,8 @@ mod tests {
         assert_eq!(LARGE_FILE_BYTES, 500 * 1024 * 1024);
         assert_eq!(OLD_INSTALLER_DAYS, 30);
         assert_eq!(FRESH_TEMP_HOURS, 24);
+        assert_eq!(DUPLICATE_MIN_BYTES, 1024 * 1024);
+        assert_eq!(DUPLICATE_HEAD_BYTES, 64 * 1024);
     }
 
     #[test]

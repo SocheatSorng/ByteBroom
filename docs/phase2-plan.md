@@ -101,13 +101,20 @@ Each task: code → tests → fmt + clippy → full tests → commit with a "why
 
     The rules for fresh temp files (decision 4) and old installers (decision 2) are applied.
   - Verify: a fake profile with every category, plus decoys that must not match.
-- [ ] **5. Large files and duplicates**
+- [x] **5. Large files and duplicates**
   - Acceptance:
     - large files use the threshold from decision 1;
     - duplicates are grouped by size, then by a hash of the first 64 KB, then by full SHA-256
       (Windows CNG, as in phase 1);
     - in each group the oldest copy is kept, and the others are offered unticked;
     - "never listed" files are excluded.
+  - Built with these defaults (not owner decisions; say if you want them changed):
+    - duplicates under 1 MiB are not offered (`DUPLICATE_MIN_BYTES`);
+    - duplicates are not searched in AppData, `.git` or build folders (`node_modules`, `target`,
+      `bin`, `obj`, `dist`), where identical files are normal and other rules cover them;
+    - cloud placeholders are never hashed (a read would download them), so they are never
+      duplicates; they can still be large files;
+    - "oldest" means the oldest change date; on a tie the shortest path is kept.
   - Verify: tests with planted duplicates, near-duplicates (same size, different content) and
     hard-linked copies (not duplicates: one file, two names).
 - [ ] **6. Red-tier sizes (read-only)**

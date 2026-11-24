@@ -47,6 +47,8 @@ pub enum Access {
     Move,
     /// Read attributes and list a folder's entries (for scanning).
     List,
+    /// Read attributes and contents (for hashing while scanning), sharing everything.
+    Read,
 }
 
 /// Why a target could not be opened.
@@ -118,6 +120,7 @@ pub fn open_no_follow(path: &WinPath, access: Access) -> Result<Opened, OpenErro
             Access::Delete => DELETE,
             Access::Move => DELETE | FILE_READ_DATA,
             Access::List => FILE_LIST_DIRECTORY,
+            Access::Read => FILE_READ_DATA,
         };
     // SAFETY: `wide` is a NUL-terminated UTF-16 string that outlives the call; the other
     // arguments are plain flags and null pointers, which CreateFileW accepts.
@@ -215,7 +218,7 @@ pub(crate) fn final_path(handle: &OwnedHandle) -> Result<WinPath, OpenError> {
 
 impl Opened {
     /// A reader for the file's contents, on a duplicate of the checked handle, so the bytes
-    /// read are those of the file that passed the check. Needs [`Access::Move`].
+    /// read are those of the file that passed the check. Needs [`Access::Move`] or [`Access::Read`].
     ///
     /// Duplicated handles share one file position, so the reader is rewound to the start:
     /// without that, a second reader would begin at the end and read nothing.

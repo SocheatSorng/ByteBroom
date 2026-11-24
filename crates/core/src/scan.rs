@@ -8,18 +8,25 @@
 //! the expected place; a link anywhere on the way means the folder is not scanned. The walker
 //! already refuses links, "never listed" names and the hard floor below each root.
 //!
-//! Large files and duplicates (task 5) and the red tier (task 6) are not produced here yet.
+//! Large files and duplicates share one search walk of the profile and the other drives.
+//! Duplicates are hashed only after their sizes match, never for cloud placeholders (reading one
+//! would download it), and never in AppData, `.git` or build folders, which are full of identical
+//! files their apps need. The red tier (task 6) is not produced here yet.
 
+use crate::duplicates::{Candidate, find_duplicates};
 use crate::locations::Locations;
 use crate::paths::WinPath;
 use crate::policy::{SystemLayout, denied_reason};
 use crate::rules::{
-    Base, Find, Look, OLD_INSTALLER_DAYS, Place, RULES, Rule, Tier, base_folder, name_matches,
+    BUILD_FOLDER_NAMES, Base, DUPLICATE_HEAD_BYTES, DUPLICATE_MIN_BYTES, Find, LARGE_FILE_BYTES,
+    Look, OLD_INSTALLER_DAYS, Place, RULES, Rule, Tier, base_folder, name_matches,
 };
 use crate::walk::{Item, Step, WalkOptions, WalkSummary};
+use crate::win::hash::Sha256;
 use crate::win::walk::walk;
 use crate::win::{Access, open_no_follow};
 use std::collections::BTreeMap;
+use std::io::Read;
 use std::sync::atomic::AtomicBool;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -55,6 +62,8 @@ pub struct Finding {
     pub cloud: bool,
     /// Ticked when shown (green only).
     pub pre_ticked: bool,
+    /// For a duplicate: the copy that is kept.
+    pub duplicate_of: Option<WinPath>,
 }
 
 /// The result of a scan.
@@ -125,6 +134,19 @@ struct Scanner<'a> {
     opts: WalkOptions<'a>,
     now: SystemTime,
     report: ScanReport,
+    /// Files from the shared large-file and duplicate search, once it has run.
+    search: Option<Vec<SearchFile>>,
+}
+
+/// A file the large-file and duplicate search kept.
+#[derive(Debug, Clone)]
+struct SearchFile {
+    path: WinPath,
+    len: u64,
+    modified: SystemTime,
+    cloud: bool,
+    /// It may be hashed and offered as a duplicate.
+    duplicate_candidate: bool,
 }
 
 impl Scanner<'_> {
@@ -254,6 +276,7 @@ impl Scanner<'_> {
             newest: t.newest(),
             cloud: t.cloud,
             pre_ticked: rule.pre_ticked(),
+            duplicate_of: None,
         });
     }
 
@@ -294,7 +317,8 @@ impl Scanner<'_> {
         }
     }
 
-    /// The trusted roots for the search areas, each once.
+    /// The trusted roots for the search areas: each once, and none inside another (Downloads
+    /// is usually inside the profile), so no file is reported twice.
     fn area_roots(&self, areas: &[Base]) -> Vec<WinPath> {
         let mut roots: Vec<WinPath> = Vec::new();
         for area in areas {
@@ -303,7 +327,8 @@ impl Scanner<'_> {
                 b => base_folder(*b, self.at).cloned().into_iter().collect(),
             };
             for r in found {
-                if !roots.iter().any(|q| q.eq_ignore_case(&r)) {
+                if !roots.iter().any(|q| r.is_at_or_inside_ignore_case(q)) {
+                    roots.retain(|q| !q.is_at_or_inside_ignore_case(&r));
                     roots.push(r);
                 }
             }
@@ -383,6 +408,105 @@ impl Scanner<'_> {
         }
     }
 
+    /// One walk for large files and duplicates (both rules search the same areas). Keeps only
+    /// files either rule can use; hard-link repeats are left out, so one file is one item.
+    fn search_files(&mut self, areas: &[Base]) -> Vec<SearchFile> {
+        if let Some(found) = &self.search {
+            return found.clone();
+        }
+        let mut found = Vec::new();
+        let app_data = self
+            .at
+            .profile
+            .as_ref()
+            .and_then(|p| p.join("AppData").ok());
+        for area in self.area_roots(areas) {
+            if !area.is_drive_root() && self.real_folder(&area).is_none() {
+                continue;
+            }
+            self.walk(&area, None, |item| {
+                let Item::File(f) = item else {
+                    return Step::Enter;
+                };
+                let large = f.len >= LARGE_FILE_BYTES;
+                let duplicate_candidate = f.len >= DUPLICATE_MIN_BYTES
+                    && !f.cloud
+                    && !app_data
+                        .as_ref()
+                        .is_some_and(|a| f.path.is_at_or_inside_ignore_case(a))
+                    && !in_build_or_git_folder(&f.path);
+                if !f.repeat && (large || duplicate_candidate) {
+                    found.push(SearchFile {
+                        path: f.path.clone(),
+                        len: f.len,
+                        modified: f.modified,
+                        cloud: f.cloud,
+                        duplicate_candidate,
+                    });
+                }
+                Step::Enter
+            });
+        }
+        self.search = Some(found.clone());
+        found
+    }
+
+    fn single_file(&mut self, rule: &'static Rule, path: &WinPath, t: &Tally) -> bool {
+        match parent(path) {
+            Some(folder) => {
+                self.push(rule, &folder, path.clone(), t);
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn large_files(&mut self, rule: &'static Rule, areas: &[Base]) {
+        for f in self.search_files(areas) {
+            if f.len >= LARGE_FILE_BYTES {
+                let mut t = Tally::new(false, f.modified);
+                t.add_file(f.len, f.modified, false, f.cloud);
+                self.single_file(rule, &f.path, &t);
+            }
+        }
+    }
+
+    fn duplicates(&mut self, rule: &'static Rule, areas: &[Base]) {
+        let candidates: Vec<Candidate> = self
+            .search_files(areas)
+            .into_iter()
+            .filter(|f| f.duplicate_candidate)
+            .map(|f| Candidate {
+                path: f.path,
+                len: f.len,
+                modified: f.modified,
+            })
+            .collect();
+        let opts = self.opts;
+        let extras = find_duplicates(
+            candidates,
+            |c| {
+                (!opts.cancelled())
+                    .then(|| hash_file(c, Some(DUPLICATE_HEAD_BYTES)))
+                    .flatten()
+            },
+            |c| (!opts.cancelled()).then(|| hash_file(c, None)).flatten(),
+        );
+        if opts.cancelled() {
+            self.report.cancelled = true;
+            return;
+        }
+        for e in extras {
+            let mut t = Tally::new(false, e.copy.modified);
+            t.add_file(e.copy.len, e.copy.modified, false, false);
+            if self.single_file(rule, &e.copy.path, &t)
+                && let Some(last) = self.report.findings.last_mut()
+            {
+                last.duplicate_of = Some(e.kept);
+            }
+        }
+    }
+
     fn run(&mut self, rule: &'static Rule) {
         match rule.look {
             Look::Contents(places) => self.contents(rule, places),
@@ -395,12 +519,16 @@ impl Scanner<'_> {
                 areas,
                 find: Find::BuildFolders(names),
             } => self.build_folders(rule, areas, names),
-            // Task 5 and task 6.
             Look::Search {
-                find: Find::LargeFiles | Find::Duplicates,
-                ..
-            }
-            | Look::SizeOnly(_) => {}
+                areas,
+                find: Find::LargeFiles,
+            } => self.large_files(rule, areas),
+            Look::Search {
+                areas,
+                find: Find::Duplicates,
+            } => self.duplicates(rule, areas),
+            // Task 6.
+            Look::SizeOnly(_) => {}
         }
     }
 }
@@ -412,6 +540,45 @@ fn parent(path: &WinPath) -> Option<WinPath> {
         .try_fold(WinPath::drive_root(path.drive()), |p, part| {
             p.join(part).ok()
         })
+}
+
+/// Below a `.git` folder or a build-output folder (by name), where identical files are normal.
+fn in_build_or_git_folder(path: &WinPath) -> bool {
+    let parts = path.parts();
+    parts[..parts.len().saturating_sub(1)].iter().any(|p| {
+        p.eq_ignore_ascii_case(".git")
+            || BUILD_FOLDER_NAMES.iter().any(|n| p.eq_ignore_ascii_case(n))
+    })
+}
+
+/// SHA-256 (Windows CNG) of a file's first `limit` bytes, or of all of it. The file is opened
+/// without following it and read through that handle; it must still be a plain file of the
+/// length the walk saw, at the same place. Anything else (locked, denied, changed) gives `None`.
+fn hash_file(c: &Candidate, limit: Option<usize>) -> Option<String> {
+    let opened = open_no_follow(&c.path, Access::Read).ok()?;
+    if opened.resolved.is_reparse_point
+        || opened.is_directory
+        || opened.size != c.len
+        || !opened.resolved.final_path.eq_ignore_case(&c.path)
+    {
+        return None;
+    }
+    let mut reader = opened.reader().ok()?;
+    let mut sha = Sha256::new()?;
+    let mut buf = vec![0u8; 256 * 1024];
+    let mut left = limit.unwrap_or(usize::MAX);
+    while left > 0 {
+        let want = buf.len().min(left);
+        let n = reader.read(&mut buf[..want]).ok()?;
+        if n == 0 {
+            break;
+        }
+        if !sha.update(&buf[..n]) {
+            return None;
+        }
+        left -= n;
+    }
+    sha.finish_hex()
 }
 
 /// `project` holds a real `.git` (a folder, or the file a worktree or submodule uses).
@@ -433,6 +600,7 @@ pub fn scan(at: &Locations, layout: &SystemLayout, opts: &ScanOptions) -> ScanRe
         },
         now: opts.now,
         report: ScanReport::default(),
+        search: None,
     };
     for rule in RULES.iter() {
         if s.stopped() {
