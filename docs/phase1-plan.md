@@ -1,6 +1,6 @@
 # Phase 1 plan: safe delete engine
 
-Status: draft, waiting for the owner's decisions. Spec: `docs/spec.md`. Branch: `phase-1-delete-engine`.
+Status: decisions made; building starts once Rust is installed. Spec: `docs/spec.md`. Branch: `phase-1-delete-engine`.
 Version after this phase: 0.1.0.
 
 ## What this phase proves
@@ -108,10 +108,16 @@ Each task: code → tests → fmt + clippy → full tests → commit with a "why
 
 ## Owner decisions
 
-1. Real Recycle Bin tests: ?
-2. How moves are verified: ?
-3. A folder with a file that can't be deleted: ?
-4. Dependency and code security checks: ?
+Decided by the owner on 2026-11-24:
+
+1. **Real Recycle Bin tests:** they run automatically on CI (throwaway runners). On the owner's PC they run
+   only when started on purpose (`#[ignore]` by default), with one dummy file named
+   `bytebroom-test-<random>.txt`.
+2. **How moves are verified:** size and SHA-256 of both copies before the source is deleted.
+3. **A folder with a file that can't be deleted:** delete everything that can go, keep the locked file
+   and its folders, and report what was skipped and why.
+4. **Dependency and code security checks:** `cargo-deny` (advisories, licenses, sources), clippy with
+   `-D warnings`, `unsafe` only in `crates/core/src/win/`, and CodeQL for Rust in CI.
 
 ## Results
 
