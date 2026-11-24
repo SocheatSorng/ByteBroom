@@ -188,7 +188,7 @@ fn undo_puts_the_file_back_and_removes_the_moved_copy() {
     move_to(&s.pol, &[wp(&source)], &wp(&s.dest), &s.journal);
     let entry = read_journal(&s.journal).unwrap().remove(0);
 
-    undo_move(&entry).unwrap();
+    undo_move(&s.pol, &entry).unwrap();
 
     assert_eq!(fs::read(&source).unwrap(), vec![2u8; 2000]);
     assert!(!s.dest.join("b.tmp").exists());
@@ -203,11 +203,11 @@ fn undo_refuses_when_the_moved_file_changed_or_the_place_is_taken() {
     let entry = read_journal(&s.journal).unwrap().remove(0);
 
     write_file(&source, b"new file in the old place");
-    assert!(undo_move(&entry).is_err());
+    assert!(undo_move(&s.pol, &entry).is_err());
     fs::remove_file(&source).unwrap();
 
     fs::write(s.dest.join("b.tmp"), b"edited after the move").unwrap();
-    assert!(undo_move(&entry).is_err());
+    assert!(undo_move(&s.pol, &entry).is_err());
     assert!(!source.exists(), "a changed file must not be restored");
     assert!(s.dest.join("b.tmp").exists(), "the moved file must be kept");
 }

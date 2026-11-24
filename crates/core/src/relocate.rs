@@ -4,10 +4,15 @@
 //! original is deleted only after the copy matched it byte for byte (size and SHA-256, the
 //! owner's decision 2) and the journal line that allows an undo is safely on disk. If any step
 //! fails, the copy ByteBroom made is removed and the original stays.
+//!
+//! Nothing here works by path after a check (security review, must-fix 1 and 2): the
+//! destination folder is held locked for the whole move, every copy is created inside that held
+//! handle, and copies are verified and removed through their own handles.
 
 use crate::engine::{MAX_DEPTH, Outcome, SkipReason, Skipped};
 use crate::paths::WinPath;
 use crate::policy::{Policy, denied_reason};
+use crate::win::dir::{CreateError, Created, LockedDir, lock_dir};
 use crate::win::hash::Sha256;
 use crate::win::{self, Access, Opened};
 use std::fs::{File, OpenOptions};
@@ -68,7 +73,8 @@ impl JournalEntry {
     }
 }
 
-/// Every valid entry in a journal file, oldest first. Unreadable lines are skipped.
+/// Every valid entry in a journal file, oldest first. Unreadable lines are skipped. The
+/// journal is user-writable, so entries are treated as untrusted: see [`undo_move`].
 pub fn read_journal(path: &Path) -> io::Result<Vec<JournalEntry>> {
     let text = std::fs::read_to_string(path)?;
     Ok(text.lines().filter_map(JournalEntry::parse).collect())
@@ -140,11 +146,7 @@ pub fn run_move(steps: &mut impl MoveSteps) -> MoveResult {
     MoveResult::Moved { size }
 }
 
-fn verbatim(path: &WinPath) -> String {
-    format!("\\\\?\\{path}")
-}
-
-/// Hash a file's contents; returns (size, SHA-256).
+/// Hash a reader's contents, optionally copying them; returns (size, SHA-256).
 fn hash_reader(
     mut reader: impl Read,
     mut sink: Option<&mut File>,
@@ -169,26 +171,23 @@ fn hash_reader(
     Ok((total, hex))
 }
 
-/// Create a new file in `dir` named like `name`, never overwriting: "a.txt", then
-/// "a (2).txt", "a (3).txt", ... Returns the file and its path.
-fn create_unique_file(dir: &WinPath, name: &str) -> Result<(File, WinPath), String> {
+fn numbered(name: &str, n: u32, keep_extension: bool) -> String {
+    if n == 1 {
+        return name.to_string();
+    }
+    match name.rsplit_once('.') {
+        Some((stem, ext)) if keep_extension && !stem.is_empty() => format!("{stem} ({n}).{ext}"),
+        _ => format!("{name} ({n})"),
+    }
+}
+
+/// Create a new file in `dir` named like `name`, never overwriting or following anything:
+/// "a.txt", then "a (2).txt", "a (3).txt", ...
+fn create_unique_file(dir: &LockedDir, name: &str) -> Result<Created, String> {
     for n in 1..=1000u32 {
-        let candidate = if n == 1 {
-            name.to_string()
-        } else {
-            match name.rsplit_once('.') {
-                Some((stem, ext)) if !stem.is_empty() => format!("{stem} ({n}).{ext}"),
-                _ => format!("{name} ({n})"),
-            }
-        };
-        let path = dir.join(&candidate).map_err(|e| e.to_string())?;
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(verbatim(&path))
-        {
-            Ok(f) => return Ok((f, path)),
-            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+        match dir.create_file(&numbered(name, n, true)) {
+            Ok(created) => return Ok(created),
+            Err(CreateError::Exists) => continue,
             Err(e) => return Err(e.to_string()),
         }
     }
@@ -196,37 +195,31 @@ fn create_unique_file(dir: &WinPath, name: &str) -> Result<(File, WinPath), Stri
 }
 
 /// Create a new folder in `dir` named like `name`, never reusing an existing one.
-fn create_unique_dir(dir: &WinPath, name: &str) -> Result<WinPath, String> {
+fn create_unique_dir(dir: &LockedDir, name: &str) -> Result<LockedDir, String> {
     for n in 1..=1000u32 {
-        let candidate = if n == 1 {
-            name.to_string()
-        } else {
-            format!("{name} ({n})")
-        };
-        let path = dir.join(&candidate).map_err(|e| e.to_string())?;
-        match std::fs::create_dir(verbatim(&path)) {
-            Ok(()) => return Ok(path),
-            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+        match dir.create_dir(&numbered(name, n, false)) {
+            Ok(created) => return Ok(created),
+            Err(CreateError::Exists) => continue,
             Err(e) => return Err(e.to_string()),
         }
     }
     Err("no free name in the destination folder".into())
 }
 
-/// The real move of one checked file.
+/// The real move of one checked file into a held destination folder.
 pub struct RealMove<'a> {
     source: Option<Opened>,
     source_path: WinPath,
-    dest_dir: &'a WinPath,
+    dest_dir: &'a LockedDir,
     name: String,
     journal: &'a Path,
-    /// Set only once this move has created the copy, so `remove_copy` can't touch other files.
-    created: Option<WinPath>,
+    /// Only a file this move created; removed through its own handle.
+    created: Option<Created>,
 }
 
 impl<'a> RealMove<'a> {
     /// `source` must have been opened with [`Access::Move`] and checked against the policy.
-    pub fn new(source: Opened, name: String, dest_dir: &'a WinPath, journal: &'a Path) -> Self {
+    pub fn new(source: Opened, name: String, dest_dir: &'a LockedDir, journal: &'a Path) -> Self {
         let source_path = source.resolved.final_path.clone();
         Self {
             source: Some(source),
@@ -237,11 +230,6 @@ impl<'a> RealMove<'a> {
             created: None,
         }
     }
-
-    /// Where the copy went (after a successful copy step).
-    pub fn dest(&self) -> Option<&WinPath> {
-        self.created.as_ref()
-    }
 }
 
 impl MoveSteps for RealMove<'_> {
@@ -251,16 +239,17 @@ impl MoveSteps for RealMove<'_> {
             .as_ref()
             .ok_or("the original is no longer open")?;
         let reader = source.reader().map_err(|e| e.to_string())?;
-        let (mut file, path) = create_unique_file(self.dest_dir, &self.name)?;
-        self.created = Some(path);
+        let created = create_unique_file(self.dest_dir, &self.name)?;
+        let mut file = created.file().map_err(|e| e.to_string())?;
+        self.created = Some(created);
         let result = hash_reader(reader, Some(&mut file))?;
         file.sync_all().map_err(|e| e.to_string())?;
         Ok(result)
     }
 
     fn verify(&mut self, size: u64, sha256: &str) -> Result<(), String> {
-        let path = self.created.as_ref().ok_or("no copy to check")?;
-        let file = File::open(verbatim(path)).map_err(|e| e.to_string())?;
+        let created = self.created.as_ref().ok_or("no copy to check")?;
+        let file = created.file().map_err(|e| e.to_string())?;
         let (copy_size, copy_hash) = hash_reader(file, None)?;
         if copy_size != size || copy_hash != sha256 {
             return Err("the copy does not match the original".into());
@@ -269,7 +258,11 @@ impl MoveSteps for RealMove<'_> {
     }
 
     fn journal(&mut self, size: u64, sha256: &str) -> Result<(), String> {
-        let dest = self.created.clone().ok_or("no copy to record")?;
+        let dest = self
+            .created
+            .as_ref()
+            .map(|c| c.path.clone())
+            .ok_or("no copy to record")?;
         let entry = JournalEntry {
             time: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -298,8 +291,8 @@ impl MoveSteps for RealMove<'_> {
     }
 
     fn remove_copy(&mut self) {
-        if let Some(path) = self.created.take() {
-            let _ = std::fs::remove_file(verbatim(&path));
+        if let Some(created) = self.created.take() {
+            let _ = created.delete();
         }
     }
 }
@@ -332,28 +325,23 @@ pub fn move_to(
     out
 }
 
-/// The destination must be a real folder (not a link), outside the hard floor, and not inside
-/// anything being moved.
+/// Lock the destination (a real folder, not a link), outside the hard floor and not inside
+/// anything being moved. It stays locked until the whole move is done.
 fn check_destination(
     policy: &Policy,
     targets: &[WinPath],
     dest: &WinPath,
-) -> Result<WinPath, String> {
-    let opened = win::open_no_follow(dest, Access::Inspect)
-        .map_err(|e| format!("destination folder: {e}"))?;
-    if opened.resolved.is_reparse_point || !opened.is_directory {
-        return Err("the destination must be a real folder, not a link or a file".into());
-    }
-    let real = opened.resolved.final_path;
-    if let Some(why) = denied_reason(&real, policy.layout()) {
+) -> Result<LockedDir, String> {
+    let locked = lock_dir(dest).map_err(|e| format!("destination folder: {e}"))?;
+    if let Some(why) = denied_reason(&locked.path, policy.layout()) {
         return Err(format!("the destination is a protected area: {why}"));
     }
     for t in targets {
-        if real.is_at_or_inside_ignore_case(t) {
+        if locked.path.is_at_or_inside_ignore_case(t) {
             return Err("the destination is inside something being moved".into());
         }
     }
-    Ok(real)
+    Ok(locked)
 }
 
 fn skip(out: &mut Outcome, path: &WinPath, reason: SkipReason) {
@@ -366,7 +354,7 @@ fn skip(out: &mut Outcome, path: &WinPath, reason: SkipReason) {
 fn move_one(
     policy: &Policy,
     path: &WinPath,
-    dest_dir: &WinPath,
+    dest_dir: &LockedDir,
     journal: &Path,
     depth: usize,
     out: &mut Outcome,
@@ -393,8 +381,8 @@ fn move_one(
     };
 
     if !opened.is_directory {
-        let other_drive = real.drive() != dest_dir.drive();
-        let frees = other_drive && opened.link_count <= 1;
+        let other_volume = opened.volume_serial != dest_dir.volume_serial;
+        let frees = other_volume && opened.link_count <= 1;
         let mut steps = RealMove::new(opened, name, dest_dir, journal);
         return match run_move(&mut steps) {
             MoveResult::Moved { size } => {
@@ -416,7 +404,8 @@ fn move_one(
         };
     }
 
-    // A folder: recreate it in the destination, move its children, then remove it if empty.
+    // A folder: recreate it inside the held destination, move its children, then remove the
+    // original if it is empty.
     drop(opened);
     let new_dir = match create_unique_dir(dest_dir, &name) {
         Ok(d) => d,
@@ -428,14 +417,20 @@ fn move_one(
     let names = match win::list_children(&real) {
         Ok(n) => n,
         Err(e) => {
+            let _ = new_dir.remove_if_empty();
             skip(out, path, SkipReason::Failed(e.to_string()));
             return false;
         }
     };
     let mut all_gone = true;
+    let mut moved_any = false;
     for child_name in names {
         match real.join(&child_name) {
-            Ok(child) => all_gone &= move_one(policy, &child, &new_dir, journal, depth + 1, out),
+            Ok(child) => {
+                let gone = move_one(policy, &child, &new_dir, journal, depth + 1, out);
+                all_gone &= gone;
+                moved_any |= gone;
+            }
             Err(e) => {
                 all_gone = false;
                 skip(
@@ -447,8 +442,10 @@ fn move_one(
         }
     }
     if !all_gone {
-        // Leave no empty copy behind if nothing at all could move (fails if it holds anything).
-        let _ = std::fs::remove_dir(verbatim(&new_dir));
+        if !moved_any {
+            // Leave no empty copy behind, removed through its own handle.
+            let _ = new_dir.remove_if_empty();
+        }
         skip(out, path, SkipReason::NotEmpty);
         return false;
     }
@@ -479,12 +476,33 @@ fn move_one(
     }
 }
 
-/// Put a moved file back where it came from, checking it is still the same file. The copy in
-/// the destination is deleted only after the restored file matched.
-pub fn undo_move(entry: &JournalEntry) -> Result<(), String> {
-    if std::fs::symlink_metadata(verbatim(&entry.source)).is_ok() {
-        return Err("something is already at the original place".into());
-    }
+fn parent_of(path: &WinPath) -> Option<(WinPath, String)> {
+    let (name, head) = path.parts().split_last()?;
+    let parent = head
+        .iter()
+        .try_fold(WinPath::drive_root(path.drive()), |acc, part| {
+            acc.join(part)
+        })
+        .ok()?;
+    Some((parent, name.clone()))
+}
+
+/// Put a moved file back where it came from.
+///
+/// The journal is user-writable, so its entries are untrusted (security review, must-fix 2):
+/// the original's folder must be a real folder inside `policy`'s allowed roots; it is held
+/// locked while the file is recreated *inside* it, never overwriting anything; and the moved
+/// copy is deleted only after the restored file matched the recorded size and SHA-256.
+pub fn undo_move(policy: &Policy, entry: &JournalEntry) -> Result<(), String> {
+    let (parent, name) = parent_of(&entry.source).ok_or("the original path has no folder")?;
+    let folder = lock_dir(&parent).map_err(|e| format!("the original folder: {e}"))?;
+    policy
+        .check_container(&crate::policy::ResolvedPath {
+            final_path: folder.path.clone(),
+            is_reparse_point: false,
+        })
+        .map_err(|r| format!("the original folder: {r}"))?;
+
     let moved = win::open_no_follow(&entry.dest, Access::Move)
         .map_err(|e| format!("the moved file: {e}"))?;
     if moved.resolved.is_reparse_point || moved.is_directory {
@@ -494,26 +512,31 @@ pub fn undo_move(entry: &JournalEntry) -> Result<(), String> {
     if size != entry.size || hash != entry.sha256 {
         return Err("the moved file has changed since it was moved".into());
     }
-    let mut restored = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(verbatim(&entry.source))
-        .map_err(|e| format!("cannot recreate the original: {e}"))?;
-    let copy = hash_reader(
-        moved.reader().map_err(|e| e.to_string())?,
-        Some(&mut restored),
-    );
-    let synced = restored.sync_all();
-    drop(restored);
-    let check = File::open(verbatim(&entry.source))
+
+    let restored = match folder.create_file(&name) {
+        Ok(c) => c,
+        Err(CreateError::Exists) => return Err("something is already at the original place".into()),
+        Err(e) => return Err(format!("cannot recreate the original: {e}")),
+    };
+    let copied = restored
+        .file()
+        .map_err(|e| e.to_string())
+        .and_then(|mut f| {
+            let r = hash_reader(moved.reader().map_err(|e| e.to_string())?, Some(&mut f))?;
+            f.sync_all().map_err(|e| e.to_string())?;
+            Ok(r)
+        });
+    let checked = restored
+        .file()
         .map_err(|e| e.to_string())
         .and_then(|f| hash_reader(f, None));
-    match (copy, synced, check) {
-        (Ok(_), Ok(()), Ok((s, h))) if s == entry.size && h == entry.sha256 => {
+    match (copied, checked) {
+        (Ok(_), Ok((s, h))) if s == entry.size && h == entry.sha256 => {
+            drop(restored);
             win::delete_by_handle(moved).map_err(|e| e.to_string())
         }
         _ => {
-            let _ = std::fs::remove_file(verbatim(&entry.source));
+            let _ = restored.delete();
             Err("restoring failed; the moved file was left where it is".into())
         }
     }
@@ -624,5 +647,13 @@ mod tests {
         ] {
             assert_eq!(JournalEntry::parse(&bad), None, "{bad:?}");
         }
+    }
+
+    #[test]
+    fn numbered_names_keep_the_extension() {
+        assert_eq!(numbered("a.tmp", 1, true), "a.tmp");
+        assert_eq!(numbered("a.tmp", 2, true), "a (2).tmp");
+        assert_eq!(numbered(".hidden", 2, true), ".hidden (2)");
+        assert_eq!(numbered("folder.v2", 3, false), "folder.v2 (3)");
     }
 }

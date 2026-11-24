@@ -174,6 +174,28 @@ impl Policy {
         &self.layout
     }
 
+    /// May files be created in this folder (to restore a moved file)? It must be a real folder
+    /// that is an allowed root or inside one, and not on the hard floor.
+    pub fn check_container(&self, folder: &ResolvedPath) -> Result<(), Refusal> {
+        if folder.is_reparse_point {
+            return Err(Refusal::ReparsePoint);
+        }
+        let is_root = self.roots.contains(&folder.final_path);
+        if !is_root
+            && !self
+                .roots
+                .iter()
+                .any(|root| folder.final_path.is_strictly_inside(root))
+        {
+            return Err(Refusal::OutsideAllowedRoots);
+        }
+        // Roots were checked when the policy was built (including %SystemRoot%\Temp).
+        if !is_root && let Some(why) = denied_reason(&folder.final_path, &self.layout) {
+            return Err(Refusal::DeniedArea(why));
+        }
+        Ok(())
+    }
+
     /// May the engine act on this target? Called again right before every action.
     pub fn check_target(&self, target: &ResolvedPath) -> Result<(), Refusal> {
         if target.is_reparse_point {

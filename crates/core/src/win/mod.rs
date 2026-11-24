@@ -6,6 +6,7 @@
 //! through the same handle, so what was checked is what gets deleted.
 #![allow(unsafe_code)]
 
+pub mod dir;
 pub mod hash;
 mod layout;
 pub mod recycle;
@@ -94,6 +95,8 @@ pub struct Opened {
     pub size: u64,
     /// Number of hard links (names) the file has.
     pub link_count: u32,
+    /// Serial number of the volume the object lives on.
+    pub volume_serial: u32,
 }
 
 fn wide_verbatim(path: &WinPath) -> Vec<u16> {
@@ -168,6 +171,7 @@ pub fn open_no_follow(path: &WinPath, access: Access) -> Result<Opened, OpenErro
             (u64::from(info.nFileSizeHigh) << 32) | u64::from(info.nFileSizeLow)
         },
         link_count: info.nNumberOfLinks,
+        volume_serial: info.dwVolumeSerialNumber,
     })
 }
 
@@ -178,7 +182,7 @@ fn zero_time() -> windows_sys::Win32::Foundation::FILETIME {
     }
 }
 
-fn final_path(handle: &OwnedHandle) -> Result<WinPath, OpenError> {
+pub(crate) fn final_path(handle: &OwnedHandle) -> Result<WinPath, OpenError> {
     let mut buf: Vec<u16> = vec![0; 512];
     loop {
         let cap = u32::try_from(buf.len()).map_err(|_| OpenError::NotFound)?;
@@ -222,12 +226,18 @@ impl Opened {
 /// have been opened with [`Access::Delete`]. POSIX semantics remove the name at once; on file
 /// systems without them, Windows' classic "delete on close" is used.
 pub fn delete_by_handle(opened: Opened) -> io::Result<()> {
+    dispose(&opened.handle)
+    // `opened` drops here; closing the handle completes a classic delete.
+}
+
+/// Mark the object behind `handle` (opened with DELETE access) for deletion.
+pub(crate) fn dispose(handle: &OwnedHandle) -> io::Result<()> {
     let ex = FILE_DISPOSITION_INFO_EX {
         Flags: FILE_DISPOSITION_FLAG_DELETE
             | FILE_DISPOSITION_FLAG_POSIX_SEMANTICS
             | FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE,
     };
-    let raw = opened.handle.as_raw_handle();
+    let raw = handle.as_raw_handle();
     // SAFETY: the handle is open with DELETE access; `ex` is the struct this class expects.
     let ok = unsafe {
         SetFileInformationByHandle(
@@ -262,7 +272,6 @@ pub fn delete_by_handle(opened: Opened) -> io::Result<()> {
     } else {
         Err(io::Error::last_os_error())
     }
-    // `opened` drops here; closing the handle completes a classic delete.
 }
 
 /// The names of a folder's direct children. Path-based, so callers re-open and re-check each
