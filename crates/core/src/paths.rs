@@ -112,6 +112,19 @@ impl WinPath {
         Ok(Self { drive, parts })
     }
 
+    /// `X:\` for a drive letter. A character that is not an ASCII letter gives `C:\`.
+    pub fn drive_root(letter: char) -> Self {
+        let drive = if letter.is_ascii_alphabetic() {
+            letter.to_ascii_uppercase()
+        } else {
+            'C'
+        };
+        Self {
+            drive,
+            parts: Vec::new(),
+        }
+    }
+
     /// The drive letter, upper case.
     pub fn drive(&self) -> char {
         self.drive

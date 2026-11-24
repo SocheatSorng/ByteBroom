@@ -1,10 +1,12 @@
 //! ByteBroom's safety core.
 //!
 //! Everything that decides what may be deleted lives here, apart from any UI. Decisions are pure
-//! functions tested on fake data; Windows calls are kept in thin adapters (`win`, added in phase 1).
+//! functions tested on fake data; Windows calls are kept in the thin `win` adapter, the only
+//! module allowed to use `unsafe`.
 
 pub mod paths;
 pub mod policy;
+pub mod win;
 
 /// The version of this crate, shown in the app and checked by the docs-drift test.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
