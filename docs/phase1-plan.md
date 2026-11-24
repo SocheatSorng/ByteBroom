@@ -1,6 +1,6 @@
 # Phase 1 plan: safe delete engine
 
-Status: decisions made; building starts once Rust is installed. Spec: `docs/spec.md`. Branch: `phase-1-delete-engine`.
+Status: built, reviewed and checked by the owner (2026-11-25); waiting for the merge. Spec: `docs/spec.md`. Branch: `phase-1-delete-engine`.
 Version after this phase: 0.1.0.
 
 ## What this phase proves
@@ -27,7 +27,7 @@ separate PowerShell checker confirms that nothing else changed.
 
 Each task: code → tests → fmt + clippy → full tests → commit with a "why" message.
 
-- [ ] **1. Workspace and checks**
+- [x] **1. Workspace and checks**
   - Acceptance: `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test` and `cargo deny check` pass
     on an empty `bytebroom-core`. Also in place:
     - `check.ps1` runs all four;
@@ -37,7 +37,7 @@ Each task: code → tests → fmt + clippy → full tests → commit with a "why
     - Dependabot for cargo.
   - Files: `Cargo.toml`, `rust-toolchain.toml`, `deny.toml`, `crates/core/*`, `check.ps1`, `.github/*`,
     `.pre-commit-config.yaml`, README.
-- [ ] **2. Path policy (pure)**
+- [x] **2. Path policy (pure)**
   - Acceptance: `check_target` refuses:
     - reparse points;
     - paths outside the allowed roots, including the root itself;
@@ -48,7 +48,7 @@ Each task: code → tests → fmt + clippy → full tests → commit with a "why
     spaces, alternate data streams and case.
   - Verify: unit tests, plus `proptest` escape attempts that must all be refused.
   - Files: `crates/core/src/policy.rs`, `paths.rs`.
-- [ ] **3. Fake-tree fixture and independent checker**
+- [x] **3. Fake-tree fixture and independent checker**
   - Acceptance: a test helper builds, in a fresh temp folder:
     - an allowed root;
     - a sentinel folder outside the root;
@@ -59,13 +59,13 @@ Each task: code → tests → fmt + clippy → full tests → commit with a "why
     `tools/verify-tree.ps1` snapshots a tree (path, size, SHA-256) and diffs two snapshots. A test proves
     that the checker notices a single changed byte.
   - Files: `crates/core/tests/common/*`, `tools/verify-tree.ps1`.
-- [ ] **4. Windows adapter: resolve without following**
+- [x] **4. Windows adapter: resolve without following**
   - Acceptance: opening with `FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS` gives the real
     final path, the attributes and the link count. A path through a junction that leads outside the root
     is refused.
   - Verify: integration tests on the fixture.
   - Files: `crates/core/src/win/*`.
-- [ ] **5. Permanent delete through the checked handle**
+- [x] **5. Permanent delete through the checked handle**
   - Acceptance:
     - files are deleted with `FileDispositionInfoEx` (POSIX semantics) on the handle that passed the
       check, and folders bottom-up;
@@ -73,7 +73,7 @@ Each task: code → tests → fmt + clippy → full tests → commit with a "why
     - files in use are skipped and reported;
     - "space freed" counts only bytes that really come back.
   - Verify: integration tests, the sentinel unchanged according to `verify-tree.ps1`.
-- [ ] **6. Recycle Bin**
+- [x] **6. Recycle Bin**
   - Acceptance:
     - the engine checks that the drive has a Recycle Bin and refuses to recycle when it doesn't;
     - it also refuses when the bin is turned off for the drive (or by the `NoRecycleFiles` policy)
@@ -84,7 +84,7 @@ Each task: code → tests → fmt + clippy → full tests → commit with a "why
     - recycling on the same drive is reported as freeing 0 bytes.
   - Verify: the decision logic is unit-tested with a fake bin. Tests that use the real Recycle Bin are
     gated (see decision 1).
-- [ ] **7. Move with verify and journal**
+- [x] **7. Move with verify and journal**
   - Acceptance:
     - each file is copied, then checked (decision 2), then written to the journal (one
       tab-separated line per file, so no extra crate is needed) before the source is deleted;
@@ -92,11 +92,11 @@ Each task: code → tests → fmt + clippy → full tests → commit with a "why
     - a minimal `undo_move` puts a file back from its journal entry.
   - Verify: integration tests, including a simulated failure in the middle of a move; the journal lives
     in a temp folder in tests.
-- [ ] **8. Safety sweep and security review**
+- [x] **8. Safety sweep and security review**
   - Acceptance: every action × every refusal case is tested in one table-driven test. The
     `security-auditor` reviews the engine read-only, and every must-fix item is fixed with its own test.
     Follow-ups go into this file.
-- [ ] **9. Owner check**
+- [x] **9. Owner check**
   - You run `./check.ps1` and the opt-in real-Recycle-Bin test with the exact steps I give you, then
     confirm that the test file shows up in your Recycle Bin and can be restored.
   - Merge with `--ff-only` on your yes, then re-run the checks on main.
@@ -169,4 +169,15 @@ files and links in the folders being cleaned while ByteBroom runs as administrat
 
 ## Results
 
-(filled in at the end of the phase)
+- **Built:** path policy, unfollowed-handle adapter, permanent delete, Recycle Bin with preflight
+  and a held folder chain, move with SHA-256, journal and undo, all on the core crate only.
+- **Tests:** 79 pass on the owner's PC (`./check.ps1`), plus two real-Recycle-Bin tests that
+  run on CI. Every delete test guards a sentinel with the independent PowerShell checker.
+- **Security review:** 3 must-fix and 4 should-fix items fixed with tests; follow-ups above.
+- **Owner check (2026-11-25):** `./check.ps1` passed; the opt-in test recycled one dummy file,
+  which the owner found in the Recycle Bin and restored; Claude confirmed it was back in its
+  folder with all 4096 bytes intact.
+- **Bugs found by tests:** the PowerShell checker crashed on a locked file and misread
+  PowerShell 5.1 JSON; duplicated handles shared a file position (undo restored an empty file,
+  safely refused); a planted junction made a create fail as "access denied" instead of
+  "name taken". Each has a regression test.

@@ -120,7 +120,7 @@ pub fn check_target(target: &ResolvedPath, policy: &Policy) -> Result<Tier, Refu
 
 | # | Phase | Proves | Result |
 |---|---|---|---|
-| 1 | **Safe delete engine** (core crate only, no UI) | Deletions can't escape their root, links are refused, and the Recycle Bin, permanent delete and move all work and can be checked independently | — |
+| 1 | **Safe delete engine** (core crate only, no UI) | Deletions can't escape their root, links are refused, and the Recycle Bin, permanent delete and move all work and can be checked independently | Done 2026-11-25: 79 tests, security review fixed, owner's Recycle Bin check passed |
 | 2 | **Scanner and tier rules** | The scan finds the green, amber and red categories on fake trees, sizes them correctly and doesn't follow links; a full scan of a large tree is fast enough | — |
 | 3 | **Window (unelevated)** | Scan → list → per-item action → preview → confirm, in a Tauri window; UI designer pass with fake data | — |
 | 4 | **Elevation and the red tier** | Relaunch through UAC on demand; red tier through DISM / `powercfg` / emptying the Recycle Bin; harness, review, restore point and recovery recipe first | — |
