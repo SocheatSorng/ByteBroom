@@ -117,7 +117,7 @@ Each task: code → tests → fmt + clippy → full tests → commit with a "why
     - "oldest" means the oldest change date; on a tie the shortest path is kept.
   - Verify: tests with planted duplicates, near-duplicates (same size, different content) and
     hard-linked copies (not duplicates: one file, two names).
-- [ ] **6. Red-tier sizes (read-only)**
+- [x] **6. Red-tier sizes (read-only)**
   - Acceptance: the Recycle Bin size (`SHQueryRecycleBinW`), the sizes of `hiberfil.sys` and
     `pagefile.sys` (read from the folder listing, without opening them), and the size of
     `Windows.old` if it is readable; everything else says "needs admin". Nothing in this task can

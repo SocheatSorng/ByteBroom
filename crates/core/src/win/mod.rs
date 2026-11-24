@@ -11,6 +11,7 @@ pub mod hash;
 mod layout;
 pub mod locations;
 pub mod recycle;
+pub mod red;
 pub mod walk;
 
 use crate::paths::{PathError, WinPath};

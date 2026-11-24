@@ -10,6 +10,7 @@ pub mod locations;
 pub mod paths;
 pub mod policy;
 pub mod recycle;
+pub mod red;
 pub mod relocate;
 pub mod rules;
 pub mod scan;
