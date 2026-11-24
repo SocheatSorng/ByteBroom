@@ -34,6 +34,8 @@ pub enum SkipReason {
     Unsupported(String),
     /// Deleting failed for another reason.
     Failed(String),
+    /// Recycling would turn into a permanent delete (no bin, bin off, too big).
+    CannotRecycle(String),
 }
 
 impl fmt::Display for SkipReason {
@@ -47,6 +49,7 @@ impl fmt::Display for SkipReason {
             Self::TooDeep => write!(f, "nested too deeply"),
             Self::Unsupported(why) => write!(f, "unsupported: {why}"),
             Self::Failed(why) => write!(f, "could not delete: {why}"),
+            Self::CannotRecycle(why) => write!(f, "{why}"),
         }
     }
 }
@@ -81,6 +84,10 @@ pub struct Outcome {
     pub skipped: Vec<Skipped>,
     /// Bytes that really came back: a file with other hard links frees nothing.
     pub bytes_freed: u64,
+    /// Bytes sent to the Recycle Bin. On the same drive they free nothing until it is emptied.
+    pub bytes_recycled: u64,
+    /// Items that are gone but need the user's attention (e.g. not found in the bin).
+    pub warnings: Vec<Skipped>,
 }
 
 impl Outcome {

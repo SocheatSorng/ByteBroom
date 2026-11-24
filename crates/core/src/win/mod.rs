@@ -6,6 +6,8 @@
 //! through the same handle, so what was checked is what gets deleted.
 #![allow(unsafe_code)]
 
+pub mod recycle;
+
 use crate::paths::{PathError, WinPath};
 use crate::policy::{ResolvedPath, SystemLayout};
 use std::ffi::OsStr;
