@@ -4,6 +4,7 @@
 //! functions tested on fake data; Windows calls are kept in the thin `win` adapter, the only
 //! module allowed to use `unsafe`.
 
+pub mod engine;
 pub mod paths;
 pub mod policy;
 pub mod win;
