@@ -4,14 +4,46 @@ A Windows disk-space cleaner. With your explicit permission (a Windows administr
 scans the drive, shows you what it can clean and how much space each item frees, and removes only what
 you confirm.
 
-> **Status: planning.** No cleaning code exists yet. What ByteBroom cleans, how deletion works and what it
-> never touches are being decided in `docs/intent/`; the phases are in `docs/spec.md`.
+> **Status: phase 2 (scanner).** The safety core and delete engine (phase 1) are done; the scanner is
+> being built. There is no app to run yet. The phases are in `docs/spec.md`.
 
 ## Safety promises
 
 - Nothing is deleted without a preview and your confirmation.
 - Tests and harnesses only ever use fake folders in a temp directory, never your real files or drives.
 - ByteBroom never touches the rules listed under "Never touched" in `docs/spec.md` (once written).
+
+## What ByteBroom cleans
+
+Green items start ticked, because Windows or the app rebuilds them. Amber items are never ticked for
+you. Red items are shown with their sizes only; ByteBroom never deletes them as files.
+
+| Tier | Category |
+|---|---|
+| Green | User temp files |
+| Green | Crash dumps |
+| Green | Windows error reports |
+| Green | Thumbnail and icon cache |
+| Green | Internet cache |
+| Green | DirectX shader cache |
+| Green | Browser caches |
+| Amber | Large files |
+| Amber | Duplicates |
+| Amber | Old installers |
+| Amber | Developer caches |
+| Amber | Build folders in code projects |
+| Red | Recycle Bin |
+| Red | Hibernation file |
+| Red | Page file |
+| Red | Previous Windows installation |
+| Red | Windows Update store |
+| Red | Delivery Optimization files |
+| Red | Restore points |
+
+Never listed at all, wherever they are: `.ssh`, `.gnupg`, `wallet.dat`, `Cookies`, `Login Data`,
+`Login Data For Account`, `Web Data`, `History`, `Bookmarks`, `Local State`, and files ending in
+`.kdbx`, `.1pif`, `.agilekeychain`, `.pfx`, `.p12`, `.pem` or `.key`. Links and junctions are never
+followed.
 
 ## Install, run, test, build
 

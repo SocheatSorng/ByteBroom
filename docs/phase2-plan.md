@@ -76,7 +76,7 @@ Each task: code → tests → fmt + clippy → full tests → commit with a "why
     build it from a fake profile in a temp folder. Values that disagree with the environment are
     not trusted (the same rule as phase 1's layout).
   - Files: `crates/core/src/win/locations.rs`, `crates/core/src/locations.rs`.
-- [ ] **2. Rule catalogue (pure)**
+- [x] **2. Rule catalogue (pure)**
   - Acceptance:
     - every rule names a tier, a plain-English label and where it looks;
     - no rule can point into the hard floor or at a "never listed" name (tests);
