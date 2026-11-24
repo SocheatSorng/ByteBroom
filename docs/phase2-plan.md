@@ -82,7 +82,7 @@ Each task: code → tests → fmt + clippy → full tests → commit with a "why
     - no rule can point into the hard floor or at a "never listed" name (tests);
     - the README's category list matches the table (docs-drift).
   - Files: `crates/core/src/rules.rs`, tests.
-- [ ] **3. Walker**
+- [x] **3. Walker**
   - Acceptance:
     - an iterative walk that never enters links or junctions and counts the folders it can't read
       ("access denied") instead of failing;

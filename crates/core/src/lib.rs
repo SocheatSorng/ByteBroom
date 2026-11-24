@@ -11,6 +11,7 @@ pub mod policy;
 pub mod recycle;
 pub mod relocate;
 pub mod rules;
+pub mod walk;
 pub mod win;
 
 /// The version of this crate, shown in the app and checked by the docs-drift test.

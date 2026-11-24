@@ -11,6 +11,7 @@ pub mod hash;
 mod layout;
 pub mod locations;
 pub mod recycle;
+pub mod walk;
 
 use crate::paths::{PathError, WinPath};
 use crate::policy::ResolvedPath;
@@ -29,8 +30,8 @@ use windows_sys::Win32::Storage::FileSystem::{
     FILE_ATTRIBUTE_REPARSE_POINT, FILE_DISPOSITION_FLAG_DELETE,
     FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE, FILE_DISPOSITION_FLAG_POSIX_SEMANTICS,
     FILE_DISPOSITION_INFO, FILE_DISPOSITION_INFO_EX, FILE_FLAG_BACKUP_SEMANTICS,
-    FILE_FLAG_OPEN_REPARSE_POINT, FILE_NAME_NORMALIZED, FILE_READ_ATTRIBUTES, FILE_READ_DATA,
-    FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FileDispositionInfo,
+    FILE_FLAG_OPEN_REPARSE_POINT, FILE_LIST_DIRECTORY, FILE_NAME_NORMALIZED, FILE_READ_ATTRIBUTES,
+    FILE_READ_DATA, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FileDispositionInfo,
     FileDispositionInfoEx, GetFileInformationByHandle, GetFinalPathNameByHandleW, OPEN_EXISTING,
     SYNCHRONIZE, SetFileInformationByHandle, VOLUME_NAME_DOS,
 };
@@ -44,6 +45,8 @@ pub enum Access {
     Delete,
     /// Read attributes and contents, and delete (for moving).
     Move,
+    /// Read attributes and list a folder's entries (for scanning).
+    List,
 }
 
 /// Why a target could not be opened.
@@ -114,6 +117,7 @@ pub fn open_no_follow(path: &WinPath, access: Access) -> Result<Opened, OpenErro
             Access::Inspect => 0,
             Access::Delete => DELETE,
             Access::Move => DELETE | FILE_READ_DATA,
+            Access::List => FILE_LIST_DIRECTORY,
         };
     // SAFETY: `wide` is a NUL-terminated UTF-16 string that outlives the call; the other
     // arguments are plain flags and null pointers, which CreateFileW accepts.
