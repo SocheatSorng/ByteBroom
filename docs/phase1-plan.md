@@ -124,6 +124,49 @@ Decided by the owner on 2026-11-24:
 4. **Dependency and code security checks:** `cargo-deny` (advisories, licenses, sources), clippy with
    `-D warnings`, `unsafe` only in `crates/core/src/win/`, and CodeQL for Rust in CI.
 
+## Security review (2026-11-25)
+
+The `security-auditor` reviewed the engine read-only, assuming a local attacker who can create
+files and links in the folders being cleaned while ByteBroom runs as administrator.
+
+**Must-fix (all fixed, each with tests):**
+
+1. **Move destination used by path.** Renaming the checked folder and planting a junction could
+   turn a copy, or a cleanup of a copy, into an arbitrary file create or delete. Now the destination
+   is held without delete-sharing; copies are created inside that handle (`NtCreateFile`,
+   `FILE_CREATE`, no link following) and verified and removed through their own handles.
+2. **Undo trusted a user-writable journal.** Undo now requires the original's folder to be a real
+   folder inside the allowed roots, holds it, and recreates the file inside it.
+3. **Recycle by path after the check.** Every folder from the allowed root down to the item's
+   parent is now held without delete-sharing for the whole shell call, and the item's volume must
+   match its drive letter's.
+
+**Should-fix (all fixed, each with a test where one is possible):**
+
+- The hard floor no longer trusts environment variables: values come from Windows APIs and
+  `HKLM`, and the environment can only add protected areas.
+- Moves skip a file another program is writing.
+- The `NoRecycleFiles` policy counts as "bin turned off".
+- The plan now names `SHFileOperationW`.
+
+**Also done:**
+
+- `Config.msi` was added to the deny list.
+- A folder holding a name that isn't valid Unicode is kept whole.
+
+**Follow-ups (for later phases):**
+
+- **Phase 4 (elevation):** decide whether recycling should run in a non-elevated helper, as the
+  reviewer prefers. With "over the shoulder" UAC (a different admin account), items recycled while
+  elevated land in that admin's Recycle Bin. At minimum the UI must warn about it.
+- **Phase 4/5:** where the move journal lives and how it is protected (an admin-only folder, or a
+  signature on each line). Undo already refuses anything outside the allowed roots.
+- **Phase 2 (scanner):** when the scanner, not the owner, picks roots, revisit sensitive
+  `ProgramData` subfolders (`Microsoft\Crypto`, the Startup folder) as roots or destinations.
+- **Phase 3 (UI):** show cloud placeholders (OneDrive) as "cloud file", not as "link".
+- **Not verifiable locally:** the real `SHFileOperationW` call with the folder chain held is
+  exercised only by CI and the owner's opt-in check.
+
 ## Results
 
 (filled in at the end of the phase)
