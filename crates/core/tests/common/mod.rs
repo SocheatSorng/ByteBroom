@@ -159,3 +159,36 @@ pub fn assert_unchanged(before: &Path, after: &Path) {
     ]);
     assert_eq!(code, 0, "tree changed:\n{text}");
 }
+
+/// A unique temp folder that is removed (with everything in it) when dropped.
+pub struct CleanDir(pub PathBuf);
+
+impl CleanDir {
+    pub fn new(tag: &str) -> Self {
+        Self(unique_dir(tag))
+    }
+}
+
+impl Drop for CleanDir {
+    fn drop(&mut self) {
+        assert!(
+            self.0.starts_with(tests_base()),
+            "refusing to clean outside the tests base"
+        );
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+/// SHA-256 of a file according to PowerShell's Get-FileHash (an independent implementation).
+pub fn powershell_sha256(file: &Path) -> String {
+    let out = Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command"])
+        .arg(format!(
+            "(Get-FileHash -Algorithm SHA256 -LiteralPath '{}').Hash",
+            file.display().to_string().replace('\'', "''")
+        ))
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}

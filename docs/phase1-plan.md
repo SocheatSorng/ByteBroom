@@ -83,8 +83,8 @@ Each task: code → tests → fmt + clippy → full tests → commit with a "why
     gated (see decision 1).
 - [ ] **7. Move with verify and journal**
   - Acceptance:
-    - each file is copied, then checked (decision 2), then written to a journal line in a JSONL file
-      before the source is deleted;
+    - each file is copied, then checked (decision 2), then written to the journal (one
+      tab-separated line per file, so no extra crate is needed) before the source is deleted;
     - an interrupted move leaves the source in place;
     - a minimal `undo_move` puts a file back from its journal entry.
   - Verify: integration tests, including a simulated failure in the middle of a move; the journal lives

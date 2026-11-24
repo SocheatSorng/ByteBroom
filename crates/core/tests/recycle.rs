@@ -88,7 +88,8 @@ impl Drop for Subst {
 
 #[test]
 fn a_subst_drive_is_treated_as_having_no_bin() {
-    let dir = unique_dir("subst");
+    let clean = CleanDir::new("subst");
+    let dir = clean.0.clone();
     let Some(letter) = ('M'..='Y')
         .rev()
         .find(|l| !Path::new(&format!("{l}:\\")).exists())

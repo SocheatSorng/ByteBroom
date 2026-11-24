@@ -158,6 +158,11 @@ impl Policy {
         &self.roots
     }
 
+    /// Where Windows keeps its own folders (the hard floor this policy enforces).
+    pub fn layout(&self) -> &SystemLayout {
+        &self.layout
+    }
+
     /// May the engine act on this target? Called again right before every action.
     pub fn check_target(&self, target: &ResolvedPath) -> Result<(), Refusal> {
         if target.is_reparse_point {

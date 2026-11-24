@@ -119,3 +119,18 @@ fn the_real_system_layout_protects_this_pc() {
         );
     }
 }
+
+#[test]
+fn a_second_reader_starts_at_the_beginning_too() {
+    // Regression: duplicated handles share one file position, so undo_move's second reader
+    // used to start at the end and restore an empty file.
+    use std::io::Read;
+    let tree = FakeTree::new();
+    let opened = open_no_follow(&wp(&tree.root.join("junk").join("a.tmp")), Access::Move).unwrap();
+    let mut first = Vec::new();
+    opened.reader().unwrap().read_to_end(&mut first).unwrap();
+    let mut second = Vec::new();
+    opened.reader().unwrap().read_to_end(&mut second).unwrap();
+    assert_eq!(first.len(), 1000);
+    assert_eq!(first, second);
+}

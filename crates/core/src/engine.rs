@@ -86,6 +86,8 @@ pub struct Outcome {
     pub bytes_freed: u64,
     /// Bytes sent to the Recycle Bin. On the same drive they free nothing until it is emptied.
     pub bytes_recycled: u64,
+    /// Bytes moved to another folder. They free space only when moved to another drive.
+    pub bytes_moved: u64,
     /// Items that are gone but need the user's attention (e.g. not found in the bin).
     pub warnings: Vec<Skipped>,
 }

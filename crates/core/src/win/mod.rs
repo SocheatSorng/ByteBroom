@@ -6,6 +6,7 @@
 //! through the same handle, so what was checked is what gets deleted.
 #![allow(unsafe_code)]
 
+pub mod hash;
 pub mod recycle;
 
 use crate::paths::{PathError, WinPath};
@@ -24,10 +25,10 @@ use windows_sys::Win32::Storage::FileSystem::{
     FILE_ATTRIBUTE_REPARSE_POINT, FILE_DISPOSITION_FLAG_DELETE,
     FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE, FILE_DISPOSITION_FLAG_POSIX_SEMANTICS,
     FILE_DISPOSITION_INFO, FILE_DISPOSITION_INFO_EX, FILE_FLAG_BACKUP_SEMANTICS,
-    FILE_FLAG_OPEN_REPARSE_POINT, FILE_NAME_NORMALIZED, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE,
-    FILE_SHARE_READ, FILE_SHARE_WRITE, FileDispositionInfo, FileDispositionInfoEx,
-    GetFileInformationByHandle, GetFinalPathNameByHandleW, OPEN_EXISTING, SYNCHRONIZE,
-    SetFileInformationByHandle, VOLUME_NAME_DOS,
+    FILE_FLAG_OPEN_REPARSE_POINT, FILE_NAME_NORMALIZED, FILE_READ_ATTRIBUTES, FILE_READ_DATA,
+    FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FileDispositionInfo,
+    FileDispositionInfoEx, GetFileInformationByHandle, GetFinalPathNameByHandleW, OPEN_EXISTING,
+    SYNCHRONIZE, SetFileInformationByHandle, VOLUME_NAME_DOS,
 };
 
 /// What the handle is opened for.
@@ -37,6 +38,8 @@ pub enum Access {
     Inspect,
     /// Read attributes and delete.
     Delete,
+    /// Read attributes and contents, and delete (for moving).
+    Move,
 }
 
 /// Why a target could not be opened.
@@ -99,8 +102,13 @@ fn wide_verbatim(path: &WinPath) -> Vec<u16> {
 /// Open `path` without following it, and read the facts the policy needs from the handle.
 pub fn open_no_follow(path: &WinPath, access: Access) -> Result<Opened, OpenError> {
     let wide = wide_verbatim(path);
-    let rights =
-        FILE_READ_ATTRIBUTES | SYNCHRONIZE | if access == Access::Delete { DELETE } else { 0 };
+    let rights = FILE_READ_ATTRIBUTES
+        | SYNCHRONIZE
+        | match access {
+            Access::Inspect => 0,
+            Access::Delete => DELETE,
+            Access::Move => DELETE | FILE_READ_DATA,
+        };
     // SAFETY: `wide` is a NUL-terminated UTF-16 string that outlives the call; the other
     // arguments are plain flags and null pointers, which CreateFileW accepts.
     let raw: HANDLE = unsafe {
@@ -185,6 +193,20 @@ fn final_path(handle: &OwnedHandle) -> Result<WinPath, OpenError> {
         }
         // Too small: `len` is the size needed, including the terminating NUL.
         buf.resize(len + 1, 0);
+    }
+}
+
+impl Opened {
+    /// A reader for the file's contents, on a duplicate of the checked handle, so the bytes
+    /// read are those of the file that passed the check. Needs [`Access::Move`].
+    ///
+    /// Duplicated handles share one file position, so the reader is rewound to the start:
+    /// without that, a second reader would begin at the end and read nothing.
+    pub fn reader(&self) -> io::Result<std::fs::File> {
+        use std::io::{Seek, SeekFrom};
+        let mut file = std::fs::File::from(self.handle.try_clone()?);
+        file.seek(SeekFrom::Start(0))?;
+        Ok(file)
     }
 }
 
