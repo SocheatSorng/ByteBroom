@@ -90,7 +90,7 @@ Each task: code → tests → fmt + clippy → full tests → commit with a "why
     - can be cancelled (for the window in phase 3);
     - sizes are file lengths, and a file with several hard links is counted once.
   - Verify: tests on fake trees; `verify-tree.ps1` proves the walk changed nothing (it only reads).
-- [ ] **4. Green and amber findings**
+- [x] **4. Green and amber findings**
   - Acceptance: rules turn walk results into findings with:
     - the rule;
     - the tier;

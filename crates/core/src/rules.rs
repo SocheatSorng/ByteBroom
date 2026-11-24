@@ -121,6 +121,8 @@ pub struct Rule {
     pub tier: Tier,
     /// Where and how it looks.
     pub look: Look,
+    /// Items with a file changed within this many hours are not offered (0: no limit).
+    pub fresh_hours: u64,
 }
 
 impl Rule {
@@ -273,19 +275,21 @@ const fn local(path: &'static str) -> Place {
 }
 
 /// Every rule, in the order the owner sees them.
-pub const RULES: [Rule; 19] = [
+pub static RULES: [Rule; 19] = [
     // Green: Windows or the app rebuilds them.
     Rule {
         id: "user-temp",
         label: "User temp files",
         tier: Tier::Green,
         look: Look::Contents(&[local("Temp")]),
+        fresh_hours: FRESH_TEMP_HOURS,
     },
     Rule {
         id: "crash-dumps",
         label: "Crash dumps",
         tier: Tier::Green,
         look: Look::Contents(&[local("CrashDumps")]),
+        fresh_hours: 0,
     },
     Rule {
         id: "error-reports",
@@ -295,6 +299,7 @@ pub const RULES: [Rule; 19] = [
             local("Microsoft\\Windows\\WER\\ReportArchive"),
             local("Microsoft\\Windows\\WER\\ReportQueue"),
         ]),
+        fresh_hours: 0,
     },
     Rule {
         id: "thumbnail-cache",
@@ -304,24 +309,28 @@ pub const RULES: [Rule; 19] = [
             places: &[local("Microsoft\\Windows\\Explorer")],
             names: &["thumbcache_*.db", "iconcache_*.db"],
         },
+        fresh_hours: 0,
     },
     Rule {
         id: "internet-cache",
         label: "Internet cache",
         tier: Tier::Green,
         look: Look::Contents(&[local("Microsoft\\Windows\\INetCache")]),
+        fresh_hours: 0,
     },
     Rule {
         id: "shader-cache",
         label: "DirectX shader cache",
         tier: Tier::Green,
         look: Look::Contents(&[local("D3DSCache")]),
+        fresh_hours: 0,
     },
     Rule {
         id: "browser-caches",
         label: "Browser caches",
         tier: Tier::Green,
         look: Look::Contents(&BROWSER_CACHES),
+        fresh_hours: 0,
     },
     // Amber: the owner picks.
     Rule {
@@ -332,6 +341,7 @@ pub const RULES: [Rule; 19] = [
             areas: &[Base::Profile, Base::Downloads, Base::OtherDrives],
             find: Find::LargeFiles,
         },
+        fresh_hours: 0,
     },
     Rule {
         id: "duplicates",
@@ -341,6 +351,7 @@ pub const RULES: [Rule; 19] = [
             areas: &[Base::Profile, Base::Downloads, Base::OtherDrives],
             find: Find::Duplicates,
         },
+        fresh_hours: 0,
     },
     Rule {
         id: "old-installers",
@@ -350,12 +361,14 @@ pub const RULES: [Rule; 19] = [
             areas: &[Base::Downloads],
             find: Find::OldInstallers(&["exe", "msi", "msix", "zip", "iso"]),
         },
+        fresh_hours: 0,
     },
     Rule {
         id: "developer-caches",
         label: "Developer caches",
         tier: Tier::Amber,
         look: Look::Contents(&DEV_CACHES),
+        fresh_hours: 0,
     },
     Rule {
         id: "build-folders",
@@ -365,6 +378,7 @@ pub const RULES: [Rule; 19] = [
             areas: &[Base::Profile, Base::OtherDrives],
             find: Find::BuildFolders(&["node_modules", "target", "bin", "obj", "dist"]),
         },
+        fresh_hours: 0,
     },
     // Red: sizes only.
     Rule {
@@ -372,42 +386,49 @@ pub const RULES: [Rule; 19] = [
         label: "Recycle Bin",
         tier: Tier::Red,
         look: Look::SizeOnly(RedItem::RecycleBin),
+        fresh_hours: 0,
     },
     Rule {
         id: "hiberfil",
         label: "Hibernation file",
         tier: Tier::Red,
         look: Look::SizeOnly(RedItem::Hiberfil),
+        fresh_hours: 0,
     },
     Rule {
         id: "pagefile",
         label: "Page file",
         tier: Tier::Red,
         look: Look::SizeOnly(RedItem::Pagefile),
+        fresh_hours: 0,
     },
     Rule {
         id: "windows-old",
         label: "Previous Windows installation",
         tier: Tier::Red,
         look: Look::SizeOnly(RedItem::WindowsOld),
+        fresh_hours: 0,
     },
     Rule {
         id: "update-store",
         label: "Windows Update store",
         tier: Tier::Red,
         look: Look::SizeOnly(RedItem::UpdateStore),
+        fresh_hours: 0,
     },
     Rule {
         id: "delivery-optimization",
         label: "Delivery Optimization files",
         tier: Tier::Red,
         look: Look::SizeOnly(RedItem::DeliveryOptimization),
+        fresh_hours: 0,
     },
     Rule {
         id: "restore-points",
         label: "Restore points",
         tier: Tier::Red,
         look: Look::SizeOnly(RedItem::RestorePoints),
+        fresh_hours: 0,
     },
 ];
 
@@ -652,6 +673,18 @@ mod tests {
         assert!(!name_matches("thumbcache_*.db", "xthumbcache_256.db"));
         assert!(!name_matches("iconcache_*.db", "thumbcache_1.db"));
         assert!(!name_matches("a*b*c", "aXXbYY"));
+    }
+
+    #[test]
+    fn only_user_temp_keeps_fresh_files() {
+        for rule in RULES.iter() {
+            let expected = if rule.id == "user-temp" {
+                FRESH_TEMP_HOURS
+            } else {
+                0
+            };
+            assert_eq!(rule.fresh_hours, expected, "{}", rule.id);
+        }
     }
 
     #[test]

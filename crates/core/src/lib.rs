@@ -11,6 +11,7 @@ pub mod policy;
 pub mod recycle;
 pub mod relocate;
 pub mod rules;
+pub mod scan;
 pub mod walk;
 pub mod win;
 
