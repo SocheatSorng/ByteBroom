@@ -19,6 +19,7 @@ reports/
 bin/
 obj/
 dist/
+target/
 build/
 publish/
 out/

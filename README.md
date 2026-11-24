@@ -15,8 +15,23 @@ you confirm.
 
 ## Install, run, test, build
 
-To be filled in once the toolchain is chosen (phase 1). Each command listed here will be checked by a
-docs-drift test.
+ByteBroom is written in Rust (the core) with a Tauri 2 window (from phase 3). Phase 1 builds only the
+safety core in `crates/core`; there is no app to run yet.
+
+1. Install Rust once: `winget install Rustlang.Rustup`, then open a new terminal. The exact Rust version
+   is pinned in `rust-toolchain.toml`, and rustup installs it on first use.
+2. Install the dependency checker once: `cargo install --locked cargo-deny`.
+3. In your project folder, run every check with `./check.ps1`, or one at a time:
+
+```
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+cargo deny check
+```
+
+Tests build fake folder trees in a fresh temp folder and never touch your own files, drives or Recycle
+Bin. A docs-drift test checks that the commands above are the ones `check.ps1` and CI really run.
 
 ## Development checks
 

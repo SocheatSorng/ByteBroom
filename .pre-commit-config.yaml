@@ -1,7 +1,6 @@
 # Install once:  uv tool install pre-commit   (or: pip install pre-commit)
 # Then:          pre-commit install           (runs on every commit)
 # Refresh pins:  pre-commit autoupdate
-# The linter, code security scanner and tests are added as local hooks once the toolchain is chosen.
 repos:
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.30.1
@@ -24,3 +23,34 @@ repos:
     rev: v1.33.1
     hooks:
       - id: zizmor
+
+  - repo: local
+    hooks:
+      # rustfmt + clippy (the code scanner: -D warnings, unsafe only in crates/core/src/win/).
+      # CodeQL in CI scans the Rust too.
+      - id: cargo-fmt
+        name: cargo fmt (format check)
+        entry: cargo fmt --all -- --check
+        language: system
+        pass_filenames: false
+        files: \.rs$
+
+      - id: cargo-clippy
+        name: cargo clippy (lint + code security rules)
+        entry: cargo clippy --workspace --all-targets -- -D warnings
+        language: system
+        pass_filenames: false
+        files: \.(rs|toml)$
+
+      - id: cargo-test
+        name: cargo test (includes the safety and docs-drift tests)
+        entry: cargo test --workspace
+        language: system
+        pass_filenames: false
+
+      - id: cargo-deny
+        name: cargo deny (vulnerabilities, licenses, sources)
+        entry: cargo deny check
+        language: system
+        pass_filenames: false
+        files: ^(Cargo\.(toml|lock)|deny\.toml|crates/.*/Cargo\.toml)$

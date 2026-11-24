@@ -10,8 +10,30 @@ on:
 permissions:
   contents: read
 
-# The code security scanner and the dependency audit are added as jobs once the toolchain is chosen.
+# The code security scanner is clippy with -D warnings in ci.yml plus CodeQL (codeql.yml).
 jobs:
+  dependencies:
+    name: Dependency audit (cargo deny)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Pinned version, built from crates.io with its own lock file.
+      - name: Install cargo-deny
+        run: cargo install --locked cargo-deny --version 0.22.1
+
+      - name: cargo deny
+        run: cargo deny check
+
   gitleaks:
     name: Secret scan (gitleaks)
     runs-on: ubuntu-latest

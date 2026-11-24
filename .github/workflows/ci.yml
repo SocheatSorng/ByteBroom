@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch: # "Run workflow" button on the Actions page
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Format, lint, test (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # rustup on the runner reads rust-toolchain.toml and installs the pinned version.
+      - name: Rust toolchain
+        shell: powershell
+        run: rustup show active-toolchain
+
+      - name: Format check
+        shell: powershell
+        run: cargo fmt --all -- --check
+
+      - name: Lint
+        shell: powershell
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # The runner is a throwaway VM, so tests that use the real Recycle Bin run here too
+      # (on the owner's PC they run only when started on purpose).
+      - name: Test
+        shell: powershell
+        env:
+          BYTEBROOM_REAL_RECYCLE_BIN_TESTS: "1"
+        run: |
+          cargo test --workspace
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --workspace -- --ignored
