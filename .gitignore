@@ -1,0 +1,60 @@
+# Secrets and personal settings: never commit
+.env
+.env.*
+*.pem
+*.key
+*.pfx
+*.p12
+*.snk
+credentials*.json
+token*.json
+secrets*.json
+
+# Scan results and logs can list the owner's file names and folders: never commit
+*.log
+scan-results/
+reports/
+
+# Build output
+bin/
+obj/
+dist/
+build/
+publish/
+out/
+*.exe
+*.dll
+*.pdb
+*.msi
+*.zip
+
+# Dependencies, caches, virtual environments
+node_modules/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+coverage/
+.coverage
+htmlcov/
+.cache/
+.vs/
+*.user
+TestResults/
+
+# Test sandboxes (tests build fake drives in temp folders; never in the repo)
+tests/sandbox/
+tools/ui-harness/out/
+
+# Editors and OS
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Claude Code local settings
+.claude/settings.local.json
