@@ -8,6 +8,7 @@
 use crate::engine::{Outcome, SkipReason, Skipped};
 use crate::paths::WinPath;
 use crate::policy::Policy;
+use crate::win::dir::{LockedDir, lock_dir};
 use crate::win::{self, Access};
 use std::collections::HashMap;
 use std::fmt;
@@ -116,15 +117,40 @@ fn recycle_one(
     }
     let real = opened.resolved.final_path.clone();
     let is_directory = opened.is_directory;
+
+    // The shell takes a path, so hold every folder from the allowed root down to the item's
+    // parent until it is done: none can be renamed or swapped for a junction meanwhile
+    // (security review, must-fix 3). Taken while our handle on the item is still open.
+    let _chain = match hold_chain(policy, &real) {
+        Ok(chain) => chain,
+        Err(why) => {
+            out.skipped.push(skip(path, SkipReason::Unsupported(why)));
+            return;
+        }
+    };
+    // The bin facts belong to the drive letter; the item must really be on that volume.
+    let drive = real.drive();
+    let drive_serial = win::open_no_follow(&WinPath::drive_root(drive), Access::Inspect)
+        .map(|d| d.volume_serial)
+        .ok();
+    if drive_serial != Some(opened.volume_serial) {
+        out.skipped.push(skip(
+            path,
+            SkipReason::CannotRecycle(
+                "the item is not on the volume of its drive letter; choose permanent delete or move instead"
+                    .into(),
+            ),
+        ));
+        return;
+    }
     let size = if is_directory {
         win::recycle::measure(&real)
     } else {
         opened.size
     };
-    // Close our handle: the shell must be able to move the item.
+    // Close our handle on the item itself: the shell must be able to move it.
     drop(opened);
 
-    let drive = real.drive();
     let bin = facts
         .entry(drive)
         .or_insert_with(|| win::recycle::bin_facts(drive))
@@ -193,6 +219,33 @@ fn recycle_one(
             out.skipped.push(skip(path, reason));
         }
     }
+}
+
+/// Hold every folder from the allowed root that contains `item` down to `item`'s parent, each
+/// opened without following it and without delete-sharing, and each at exactly the expected
+/// real path. While the returned handles live, no folder on the way can be renamed or replaced.
+pub fn hold_chain(policy: &Policy, item: &WinPath) -> Result<Vec<LockedDir>, String> {
+    let root = policy
+        .roots()
+        .iter()
+        .find(|root| item.is_strictly_inside(root))
+        .ok_or("outside the folders chosen for this clean")?;
+    let (_, parents) = item.parts().split_last().ok_or("no folder to hold")?;
+    let mut chain = Vec::new();
+    let mut current = WinPath::drive_root(item.drive());
+    for (depth, part) in parents.iter().enumerate() {
+        current = current.join(part).map_err(|e| e.to_string())?;
+        if depth + 1 < root.parts().len() {
+            continue; // above the root: not ours to hold
+        }
+        let held =
+            lock_dir(&current).map_err(|e| format!("could not hold the folder {current}: {e}"))?;
+        if held.path != current {
+            return Err(format!("the folder {current} changed"));
+        }
+        chain.push(held);
+    }
+    Ok(chain)
 }
 
 fn skip(path: &WinPath, reason: SkipReason) -> Skipped {

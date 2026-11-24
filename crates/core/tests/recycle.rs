@@ -174,3 +174,44 @@ fn real_bin_recycles_the_rest_of_a_folder_with_a_locked_file() {
     assert!(reasons.contains(&SkipReason::NotEmpty), "{reasons:?}");
     drop(held);
 }
+
+#[test]
+fn every_folder_from_the_root_to_the_parent_is_held_while_the_shell_runs() {
+    // Security review must-fix 3: the shell takes a path, so no folder on the way may be
+    // renamed or swapped for a junction until it is done.
+    use bytebroom_core::recycle::hold_chain;
+    let tree = FakeTree::new();
+    let pol = policy_for(&tree);
+    let item = wp(&tree.root.join("junk").join("deep").join("c.tmp"));
+    let chain = hold_chain(&pol, &item).unwrap();
+    assert_eq!(chain.len(), 3, "root, junk and deep");
+    let junk = tree.root.join("junk");
+    let deep = junk.join("deep");
+    assert!(
+        std::fs::rename(&deep, junk.join("deep2")).is_err(),
+        "deep was renamed"
+    );
+    assert!(
+        std::fs::rename(&junk, tree.root.join("junk2")).is_err(),
+        "junk was renamed"
+    );
+    assert!(
+        std::fs::rename(&tree.root, tree.base.join("root2")).is_err(),
+        "root was renamed"
+    );
+    // The item itself can still be moved out to another folder on the same volume, which is
+    // how the shell sends it to $Recycle.Bin.
+    std::fs::rename(deep.join("c.tmp"), tree.base.join("c-moved.tmp")).unwrap();
+    assert!(tree.base.join("c-moved.tmp").exists());
+    drop(chain);
+    std::fs::rename(&deep, junk.join("deep2")).unwrap();
+}
+
+#[test]
+fn holding_refuses_items_outside_the_roots() {
+    use bytebroom_core::recycle::hold_chain;
+    let tree = FakeTree::new();
+    let pol = policy_for(&tree);
+    assert!(hold_chain(&pol, &wp(&tree.sentinel.join("keep.txt"))).is_err());
+    assert!(hold_chain(&pol, &wp(&tree.root)).is_err());
+}
