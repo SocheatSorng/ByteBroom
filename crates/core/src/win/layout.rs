@@ -40,7 +40,7 @@ fn windows_dir() -> Option<WinPath> {
         .and_then(|s| parse(&s))
 }
 
-fn known_folder(id: &GUID) -> Option<WinPath> {
+pub(super) fn known_folder(id: &GUID) -> Option<WinPath> {
     let mut out: PWSTR = std::ptr::null_mut();
     // SAFETY: `id` is a valid GUID; `out` receives a CoTaskMem string we free below.
     let hr = unsafe {
@@ -140,7 +140,7 @@ fn replace_ignore_ascii_case(text: &str, pattern: &str, with: &str) -> String {
     }
 }
 
-fn env_path(name: &str) -> Option<WinPath> {
+pub(super) fn env_path(name: &str) -> Option<WinPath> {
     std::env::var(name).ok().and_then(|v| parse(&v))
 }
 

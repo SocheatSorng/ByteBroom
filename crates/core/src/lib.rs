@@ -5,6 +5,7 @@
 //! module allowed to use `unsafe`.
 
 pub mod engine;
+pub mod locations;
 pub mod paths;
 pub mod policy;
 pub mod recycle;

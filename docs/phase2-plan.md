@@ -70,7 +70,7 @@ Decided by the owner on 2026-11-25:
 
 Each task: code → tests → fmt + clippy → full tests → commit with a "why" message.
 
-- [ ] **1. Locations**
+- [x] **1. Locations**
   - Acceptance: a `Locations` struct holds the folders the rules use (LocalAppData, the profile,
     Downloads, and the other drives). The real one is built from `SHGetKnownFolderPath`; tests
     build it from a fake profile in a temp folder. Values that disagree with the environment are

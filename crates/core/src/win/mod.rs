@@ -9,6 +9,7 @@
 pub mod dir;
 pub mod hash;
 mod layout;
+pub mod locations;
 pub mod recycle;
 
 use crate::paths::{PathError, WinPath};
