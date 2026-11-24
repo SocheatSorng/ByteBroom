@@ -9,7 +9,7 @@ use std::fmt;
 /// Names directly under any drive root that are never acted on, whatever the UI asks.
 /// Red-tier space (pagefile, restore points, the Recycle Bin store) is freed only through
 /// Windows' own tools (phase 4).
-pub const DENIED_AT_DRIVE_ROOT: [&str; 13] = [
+pub const DENIED_AT_DRIVE_ROOT: [&str; 14] = [
     "pagefile.sys",
     "hiberfil.sys",
     "swapfile.sys",
@@ -23,6 +23,7 @@ pub const DENIED_AT_DRIVE_ROOT: [&str; 13] = [
     "$WinREAgent",
     "$Windows.~BT",
     "$Windows.~WS",
+    "Config.msi",
 ];
 
 /// Where Windows keeps its own folders on this PC. Built from the real environment by the
@@ -39,6 +40,9 @@ pub struct SystemLayout {
     pub profiles_dir: WinPath,
     /// Every user profile folder, e.g. `C:\Users\Ann`.
     pub profile_roots: Vec<WinPath>,
+    /// Further protected areas, whole subtrees (e.g. an environment variable that disagrees with
+    /// the Windows API). Only ever adds protection.
+    pub extra_denied: Vec<WinPath>,
 }
 
 impl SystemLayout {
@@ -109,6 +113,13 @@ pub fn denied_reason(path: &WinPath, layout: &SystemLayout) -> Option<String> {
         .any(|pf| path.is_at_or_inside_ignore_case(pf))
     {
         return Some("Program Files".into());
+    }
+    if layout
+        .extra_denied
+        .iter()
+        .any(|area| path.is_at_or_inside_ignore_case(area))
+    {
+        return Some("a protected Windows folder".into());
     }
     if path.eq_ignore_case(&layout.program_data) {
         return Some("ProgramData itself".into());
@@ -204,6 +215,7 @@ mod tests {
             program_data: p("C:\\ProgramData"),
             profiles_dir: p("C:\\Users"),
             profile_roots: vec![p("C:\\Users\\Ann"), p("C:\\Users\\Public")],
+            extra_denied: vec![p("D:\\WinOld")],
         }
     }
 

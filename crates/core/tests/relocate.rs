@@ -243,3 +243,23 @@ fn moving_to_another_drive_frees_the_space() {
     );
     let _ = fs::remove_dir_all(&other_dir);
 }
+
+#[test]
+fn a_file_open_for_writing_is_not_moved() {
+    // Security review should-fix 5: bytes written after the copy would be lost.
+    let s = setup();
+    let source = s.tree.root.join("junk").join("a.tmp");
+    let writer = OpenOptions::new()
+        .write(true)
+        .share_mode(7) // read | write | delete: only the write access matters here
+        .open(&source)
+        .unwrap();
+    let out = move_to(&s.pol, &[wp(&source)], &wp(&s.dest), &s.journal);
+    drop(writer);
+    assert_eq!(out.skipped[0].reason, SkipReason::InUse);
+    assert!(source.exists());
+    assert!(
+        fs::read_dir(&s.dest).unwrap().next().is_none(),
+        "nothing may be copied"
+    );
+}

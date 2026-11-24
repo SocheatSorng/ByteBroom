@@ -9,7 +9,9 @@ use windows_sys::Win32::Storage::FileSystem::{
     FILE_ATTRIBUTE_REPARSE_POINT, GetDiskFreeSpaceExW, GetDriveTypeW,
     GetVolumeNameForVolumeMountPointW, QueryDosDeviceW,
 };
-use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
+use windows_sys::Win32::System::Registry::{
+    HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_RT_REG_DWORD, RegGetValueW,
+};
 use windows_sys::Win32::System::WindowsProgramming::DRIVE_FIXED;
 use windows_sys::Win32::UI::Shell::{
     FO_DELETE, FOF_ALLOWUNDO, FOF_NO_UI, SHFILEOPSTRUCTW, SHFileOperationW, SHQUERYRBINFO,
@@ -57,6 +59,13 @@ pub fn bin_facts(letter: char) -> BinFacts {
         }
         None => (true, None), // unknown volume: treat the bin as off (refuse to recycle)
     };
+    // The "Don't move deleted files to the Recycle Bin" group policy, per user or per machine,
+    // also makes Windows delete for good (security review, should-fix 6).
+    let policy_key = "Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer";
+    let no_recycle_policy = [HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE]
+        .into_iter()
+        .any(|hive| read_dword_in(hive, policy_key, "NoRecycleFiles").unwrap_or(0) == 1);
+    let nuke_on_delete = nuke_on_delete || no_recycle_policy;
     let max_bytes = match max_mb {
         Some(mb) => u64::from(mb) * 1024 * 1024,
         None => drive_total(&root_w) / 100 * DEFAULT_SHARE_PERCENT,
@@ -87,6 +96,10 @@ fn volume_guid(root: &[u16]) -> Option<String> {
 }
 
 fn read_dword(key: &str, value: &str) -> Option<u32> {
+    read_dword_in(HKEY_CURRENT_USER, key, value)
+}
+
+fn read_dword_in(hive: HKEY, key: &str, value: &str) -> Option<u32> {
     let key_w = wide(key);
     let value_w = wide(value);
     let mut data: u32 = 0;
@@ -94,7 +107,7 @@ fn read_dword(key: &str, value: &str) -> Option<u32> {
     // SAFETY: strings are NUL-terminated; `data` is a writable u32 and `size` says so.
     let status = unsafe {
         RegGetValueW(
-            HKEY_CURRENT_USER,
+            hive,
             key_w.as_ptr(),
             value_w.as_ptr(),
             RRF_RT_REG_DWORD,

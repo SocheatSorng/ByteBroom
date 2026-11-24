@@ -21,6 +21,7 @@ fn layout() -> SystemLayout {
         program_data: p("C:\\ProgramData"),
         profiles_dir: p("C:\\Users"),
         profile_roots: vec![p("C:\\Users\\Ann")],
+        extra_denied: vec![],
     }
 }
 

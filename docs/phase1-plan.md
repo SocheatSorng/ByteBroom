@@ -76,8 +76,11 @@ Each task: code → tests → fmt + clippy → full tests → commit with a "why
 - [ ] **6. Recycle Bin**
   - Acceptance:
     - the engine checks that the drive has a Recycle Bin and refuses to recycle when it doesn't;
-    - it re-checks the target just before recycling through `IFileOperation` with `FOFX_RECYCLEONDELETE`
-      and no UI, and confirms afterwards that the file is gone from its place;
+    - it also refuses when the bin is turned off for the drive (or by the `NoRecycleFiles` policy)
+      or the item is bigger than the bin, since Windows would then delete it for good without
+      asking;
+    - it re-checks the target just before recycling through `SHFileOperationW` (`FOF_ALLOWUNDO`, no
+      UI), and confirms afterwards that the item is gone and the bin grew by its size;
     - recycling on the same drive is reported as freeing 0 bytes.
   - Verify: the decision logic is unit-tested with a fake bin. Tests that use the real Recycle Bin are
     gated (see decision 1).
@@ -100,8 +103,10 @@ Each task: code → tests → fmt + clippy → full tests → commit with a "why
 
 ## Risks
 
-- **Time-of-check gap when recycling:** `IFileOperation` takes a path, not a handle. Mitigation: check,
-  recycle, then confirm the result; recycle only inside allowed roots. This goes to the security review.
+- **Time-of-check gap when recycling:** `SHFileOperationW` takes a path, not a handle. The security
+  review showed check-then-confirm is not enough once ByteBroom runs as administrator. The fix: hold
+  every folder from the allowed root down to the item's parent open without delete-sharing for the
+  whole shell call, so none can be renamed or swapped for a junction (see "Security review").
 - **Creating junctions in tests:** creating a junction needs no administrator rights, but a symlink does
   (or Developer Mode). Tests use junctions, and symlink cases run on CI, whose runner is an administrator.
 - **CI runners run as administrator,** so tests that expect "refused without admin" are skipped there.

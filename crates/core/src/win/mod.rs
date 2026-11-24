@@ -7,10 +7,12 @@
 #![allow(unsafe_code)]
 
 pub mod hash;
+mod layout;
 pub mod recycle;
 
 use crate::paths::{PathError, WinPath};
-use crate::policy::{ResolvedPath, SystemLayout};
+use crate::policy::ResolvedPath;
+pub use layout::system_layout;
 use std::ffi::OsStr;
 use std::fmt;
 use std::io;
@@ -115,7 +117,13 @@ pub fn open_no_follow(path: &WinPath, access: Access) -> Result<Opened, OpenErro
         CreateFileW(
             wide.as_ptr(),
             rights,
-            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            // A move must not lose bytes another program writes after the copy, so it refuses
+            // to share write access: a file open for writing is "in use" (security review).
+            if access == Access::Move {
+                FILE_SHARE_READ | FILE_SHARE_DELETE
+            } else {
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
+            },
             std::ptr::null(),
             OPEN_EXISTING,
             FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS,
@@ -259,65 +267,19 @@ pub fn delete_by_handle(opened: Opened) -> io::Result<()> {
 
 /// The names of a folder's direct children. Path-based, so callers re-open and re-check each
 /// child before acting on it.
+///
+/// A name that is not valid Unicode can't be represented exactly (a lossy copy could name a
+/// different file), so such a folder is refused as a whole and kept (security review note).
 pub fn list_children(dir: &WinPath) -> io::Result<Vec<String>> {
     let mut names = Vec::new();
     for entry in std::fs::read_dir(format!("\\\\?\\{dir}"))? {
-        names.push(entry?.file_name().to_string_lossy().into_owned());
+        let name = entry?.file_name().into_string().map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "it holds a name that is not valid Unicode",
+            )
+        })?;
+        names.push(name);
     }
     Ok(names)
-}
-
-fn env_path(name: &str) -> Option<WinPath> {
-    std::env::var(name)
-        .ok()
-        .and_then(|v| WinPath::parse(&v).ok())
-}
-
-/// Where Windows keeps its own folders on this PC, read from the environment. Missing values
-/// fall back to the standard locations, so the hard floor is never empty.
-pub fn system_layout() -> SystemLayout {
-    let fallback = |s: &str| WinPath::parse(s).ok();
-    let system_root = env_path("SystemRoot")
-        .or_else(|| fallback("C:\\Windows"))
-        .unwrap_or_else(|| unreachable_layout("SystemRoot"));
-    let mut program_files: Vec<WinPath> = ["ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"]
-        .iter()
-        .filter_map(|n| env_path(n))
-        .collect();
-    program_files.extend(fallback("C:\\Program Files"));
-    program_files.extend(fallback("C:\\Program Files (x86)"));
-    let program_data = env_path("ProgramData")
-        .or_else(|| fallback("C:\\ProgramData"))
-        .unwrap_or_else(|| unreachable_layout("ProgramData"));
-    let profile = env_path("USERPROFILE");
-    let profiles_dir = profile
-        .as_ref()
-        .and_then(parent)
-        .or_else(|| fallback("C:\\Users"))
-        .unwrap_or_else(|| unreachable_layout("profiles"));
-    let mut profile_roots: Vec<WinPath> = list_children(&profiles_dir)
-        .unwrap_or_default()
-        .iter()
-        .filter_map(|name| profiles_dir.join(name).ok())
-        .collect();
-    profile_roots.extend(profile);
-    SystemLayout {
-        system_root,
-        program_files,
-        program_data,
-        profiles_dir,
-        profile_roots,
-    }
-}
-
-fn parent(path: &WinPath) -> Option<WinPath> {
-    let parts = path.parts();
-    let (_, head) = parts.split_last()?;
-    WinPath::parse(&format!("{}:\\{}", path.drive(), head.join("\\"))).ok()
-}
-
-/// The fallbacks above are fixed, valid literals, so this is never reached; it exists so the
-/// code needs no `unwrap`. `C:\` is the most protective answer: the whole drive counts as Windows.
-fn unreachable_layout(_what: &str) -> WinPath {
-    WinPath::drive_root('C')
 }

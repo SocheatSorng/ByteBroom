@@ -153,3 +153,45 @@ fn no_root_can_reach_a_protected_area() {
         );
     }
 }
+
+/// Runs inside a child process whose environment points SystemRoot, windir and ProgramData
+/// somewhere else (see the test below). Does nothing in a normal run.
+#[test]
+fn child_steered_environment_check() {
+    if std::env::var("BYTEBROOM_STEERED_ENV_CHILD").as_deref() != Ok("1") {
+        return;
+    }
+    let layout = system_layout();
+    let windows = WinPath::parse(r"C:\Windows").unwrap();
+    assert!(
+        denied_reason(&windows, &layout).is_some(),
+        r"C:\Windows lost its protection"
+    );
+    assert!(denied_reason(&windows.join("System32").unwrap(), &layout).is_some());
+    let program_data = WinPath::parse(r"C:\ProgramData").unwrap();
+    assert!(denied_reason(&program_data, &layout).is_some());
+    // The steered values are protected too: steering only adds refusals.
+    let steered = WinPath::parse(r"C:\Nope").unwrap();
+    assert!(denied_reason(&steered.join("x").unwrap(), &layout).is_some());
+}
+
+#[test]
+fn a_steered_environment_cannot_remove_protection() {
+    // Security review should-fix 4: any program running as the user can change these variables.
+    let out = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["child_steered_environment_check", "--exact", "--nocapture"])
+        .env("BYTEBROOM_STEERED_ENV_CHILD", "1")
+        .env("SystemRoot", r"C:\Nope")
+        .env("windir", r"C:\Nope")
+        .env("ProgramData", r"C:\Nope\Data")
+        .env("ProgramFiles", r"C:\Nope\PF")
+        .output()
+        .unwrap();
+    let text =
+        String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{text}");
+    assert!(
+        text.contains("1 passed"),
+        "the child test did not run: {text}"
+    );
+}

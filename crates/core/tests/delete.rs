@@ -171,3 +171,26 @@ fn a_missing_target_is_reported_already_gone() {
     let out = delete_permanently(&pol, &[wp(&tree.root.join("never-there.tmp"))]);
     assert_eq!(out.skipped[0].reason, SkipReason::NotFound);
 }
+
+#[test]
+fn a_folder_holding_a_name_that_is_not_valid_unicode_is_kept_whole() {
+    // Security review note: a lossy copy of such a name could point at a different file.
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStringExt;
+    let tree = FakeTree::new();
+    let pol = policy_for(&tree);
+    let odd = tree.root.join("odd");
+    write_file(&odd.join("fine.tmp"), b"ok");
+    let bad_name = OsString::from_wide(&[0x0062, 0xD800, 0x0063]); // b, lone surrogate, c
+    fs::write(odd.join(&bad_name), b"x").unwrap();
+    let out = delete_permanently(&pol, &[wp(&odd)]);
+    assert!(odd.join(&bad_name).exists());
+    assert!(odd.exists());
+    assert!(
+        out.skipped
+            .iter()
+            .any(|s| s.reason.to_string().contains("not valid Unicode")),
+        "{:?}",
+        out.skipped
+    );
+}
