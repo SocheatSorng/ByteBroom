@@ -23,7 +23,9 @@ use windows_sys::Win32::System::LibraryLoader::{
 use windows_sys::Win32::System::Registry::{
     HKEY, HKEY_LOCAL_MACHINE, KEY_READ, RegCloseKey, RegOpenKeyExW,
 };
-use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
+use windows_sys::Win32::System::SystemInformation::{
+    GetSystemDirectoryW, GetSystemWindowsDirectoryW,
+};
 use windows_sys::Win32::System::Threading::{
     GetCurrentProcess, GetExitCodeProcess, OpenProcessToken, WaitForSingleObject,
 };
@@ -288,6 +290,38 @@ pub fn system32() -> Option<WinPath> {
         return None;
     }
     WinPath::parse(&String::from_utf16(&buf[..len]).ok()?).ok()
+}
+
+/// Windows' own folder, from the API (`GetSystemWindowsDirectoryW`), not the environment.
+pub fn windows_dir() -> Option<WinPath> {
+    let mut buf = vec![0u16; 512];
+    // SAFETY: `buf` is writable for its length.
+    let len = unsafe { GetSystemWindowsDirectoryW(buf.as_mut_ptr(), buf.len() as u32) } as usize;
+    if len == 0 || len >= buf.len() {
+        return None;
+    }
+    WinPath::parse(&String::from_utf16(&buf[..len]).ok()?).ok()
+}
+
+/// Replace this process's whole environment with [`crate::admin::fixed_environment`] (review
+/// of task 2, S2). The helper calls it first thing, while it is the only thread; it must not be
+/// called once other threads may read the environment.
+pub fn reset_environment() -> bool {
+    let (Some(windows), Some(system32)) = (windows_dir(), system32()) else {
+        return false;
+    };
+    let fixed = crate::admin::fixed_environment(&windows.to_string(), &system32.to_string());
+    let old: Vec<std::ffi::OsString> = std::env::vars_os().map(|(k, _)| k).collect();
+    for key in old {
+        // SAFETY: called at the start of the helper's `main`, before any other thread exists,
+        // so nothing reads the environment meanwhile.
+        unsafe { std::env::remove_var(&key) };
+    }
+    for (key, value) in fixed {
+        // SAFETY: as above.
+        unsafe { std::env::set_var(key, value) };
+    }
+    true
 }
 
 /// Make System32 this process's current folder, so nothing is looked up in a folder the user

@@ -60,9 +60,13 @@ fn wide(text: &str) -> Vec<u16> {
     OsStr::new(text).encode_wide().chain(Some(0)).collect()
 }
 
+/// A SID buffer, 4-byte aligned as SIDs expect (security review of task 2, note 1).
+#[repr(C, align(4))]
+struct SidBuf([u8; SECURITY_MAX_SID_SIZE as usize]);
+
 /// The parts of COM's security descriptor, kept together so every pointer inside stays valid.
 pub struct ComSecurity {
-    sids: Vec<[u8; SECURITY_MAX_SID_SIZE as usize]>,
+    sids: Vec<SidBuf>,
     acl: Vec<u64>,
     sd: Box<SECURITY_DESCRIPTOR>,
 }
@@ -73,14 +77,14 @@ impl ComSecurity {
     pub fn build() -> Option<Self> {
         let mut sids = Vec::with_capacity(CALLERS.len());
         for kind in CALLERS {
-            let mut sid = [0u8; SECURITY_MAX_SID_SIZE as usize];
+            let mut sid = SidBuf([0u8; SECURITY_MAX_SID_SIZE as usize]);
             let mut size = SECURITY_MAX_SID_SIZE;
             // SAFETY: `sid` is writable for `size` bytes; no domain SID is needed for these.
             let ok = unsafe {
                 CreateWellKnownSid(
                     kind,
                     std::ptr::null_mut(),
-                    sid.as_mut_ptr().cast(),
+                    sid.0.as_mut_ptr().cast(),
                     &mut size,
                 )
             };
@@ -100,7 +104,7 @@ impl ComSecurity {
         for sid in &mut sids {
             // SAFETY: the ACL was initialised with room for every entry; `sid` is a valid SID.
             let ok = unsafe {
-                AddAccessAllowedAce(acl_ptr, ACL_REVISION, COM_RIGHTS, sid.as_mut_ptr().cast())
+                AddAccessAllowedAce(acl_ptr, ACL_REVISION, COM_RIGHTS, sid.0.as_mut_ptr().cast())
             };
             if ok == 0 {
                 return None;
@@ -109,7 +113,7 @@ impl ComSecurity {
         // SAFETY: SECURITY_DESCRIPTOR is plain data; InitializeSecurityDescriptor fills it in.
         let mut sd: Box<SECURITY_DESCRIPTOR> = Box::new(unsafe { std::mem::zeroed() });
         let sd_ptr = (&raw mut *sd).cast::<std::ffi::c_void>();
-        let admins: PSID = sids[0].as_mut_ptr().cast();
+        let admins: PSID = sids[0].0.as_mut_ptr().cast();
         // SAFETY: `sd` is a writable descriptor; the SIDs and ACL it points to live in `self`,
         // whose heap buffers don't move when `self` does.
         let ok = unsafe {

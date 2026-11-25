@@ -68,11 +68,30 @@ pub fn exit_for(point: RestorePoint) -> Exit {
     }
 }
 
+/// Proof that a restore point is in place in this run. Only [`guarded`] can make one (its field
+/// is private), and every function that changes the system takes one, so an action that skips
+/// the restore point doesn't compile (security review of task 2, S1).
+#[derive(Debug)]
+pub struct PointInPlace {
+    sequence: i64,
+}
+
+impl PointInPlace {
+    /// The restore point's sequence number.
+    pub fn sequence(&self) -> i64 {
+        self.sequence
+    }
+}
+
 /// Run `act` only if `make_point` puts a restore point in place first; otherwise answer why
-/// not, and do nothing. Every system-changing action goes through this.
-pub fn guarded(make_point: impl FnOnce() -> RestorePoint, act: impl FnOnce() -> Exit) -> Exit {
+/// not, and do nothing. Every system-changing action goes through this: it is the only place
+/// a [`PointInPlace`] is made.
+pub fn guarded(
+    make_point: impl FnOnce() -> RestorePoint,
+    act: impl FnOnce(PointInPlace) -> Exit,
+) -> Exit {
     match make_point() {
-        RestorePoint::InPlace(_) => act(),
+        RestorePoint::InPlace(sequence) => act(PointInPlace { sequence }),
         other => exit_for(other),
     }
 }
@@ -125,7 +144,7 @@ mod tests {
             let ran = Cell::new(false);
             let exit = guarded(
                 || point,
-                || {
+                |_| {
                     ran.set(true);
                     Exit::Done
                 },
@@ -136,7 +155,8 @@ mod tests {
         let ran = Cell::new(false);
         let exit = guarded(
             || RestorePoint::InPlace(9),
-            || {
+            |proof| {
+                assert_eq!(proof.sequence(), 9, "the action gets the point's number");
                 ran.set(true);
                 Exit::Failed
             },
@@ -153,7 +173,7 @@ mod tests {
                 order.borrow_mut().push("point");
                 RestorePoint::InPlace(1)
             },
-            || {
+            |_| {
                 order.borrow_mut().push("act");
                 Exit::Done
             },

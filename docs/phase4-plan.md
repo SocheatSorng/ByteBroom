@@ -344,6 +344,28 @@ Each task: code → tests → fmt + clippy → full tests → build → commit w
     - from the build folder, the helper refuses `restore-point` too.
   - **On the owner's PC** (read-only): System Restore is on (`RPSessionInterval = 1`), with no
     policy turning it off.
+  - **Security review** (2026-11-25): no must-fix. Fixed with tests:
+    - **S1:**
+      - system-changing code needs a `PointInPlace` proof that only `guarded` can make (its
+        field is private), so an action without a restore point doesn't compile;
+      - a sweep test runs every action but the no-op with System Restore off, low disk and
+        failed, and checks each asked for a restore point and stopped.
+    - **S2:**
+      - the helper replaces its whole environment, as its first step after locking DLL
+        loading, with a fixed one built from the Windows API (`fixed_environment`):
+        `SystemRoot`, `windir`, `SystemDrive`, `ComSpec`, a System32 `PATH`, `PATHEXT`,
+        `TEMP`, `TMP`;
+      - so `windir`, `SystemRoot`, `COMPLUS_*`, `COR_*` or `__COMPAT_LAYER` from
+        `HKCU\Environment` never reach the elevated process;
+      - a separate test program plants such variables and checks only the fixed list is left.
+    - **Note 1:** SID buffers are explicitly 4-byte aligned.
+  - **Notes kept:**
+    - **No cancel when END fails:** cancelling (`CANCELLED_OPERATION`) could remove an
+      earlier, complete restore point when Windows reused one. Nothing runs either way.
+    - **Age of the point:** a restore point "in place" can be up to 24 hours old (decision 5
+      accepts this), and the window's text will say so in task 5.
+    - **Same-day second run:** after a skip, END is called on an already-complete point. The
+      owner's check runs the action twice on the same day to prove that still answers `Done`.
 - [ ] **3. Recovery recipe** in `docs/recovery.md`:
   - how to undo each action (for example `powercfg /hibernate on`);
   - how to roll back with System Restore, including from Windows' recovery screen;
@@ -454,7 +476,10 @@ The helper changed, so it is installed again. In your project folder:
    - or none is new because one already existed from the last 24 hours (Windows allows one a
      day). Then the newest point listed should be from within the last day.
    - Close the window with **Cancel**; don't restore anything.
-5. Tell Claude what step 3 printed, and what rstrui showed at the top (name and date).
+5. Run step 3 once more, the same day, and click **Yes**. Expected: `Answer: Done (done)` again.
+   Windows allows one restore point a day, so this time it reuses the one from step 3, and
+   rstrui shows no second "ByteBroom" point.
+6. Tell Claude what steps 3 and 5 printed, and what rstrui showed at the top (name and date).
 
 ## Risks
 

@@ -136,6 +136,28 @@ impl Exit {
     }
 }
 
+/// The whole environment the elevated helper keeps (security review of task 2, S2). Elevated,
+/// it would otherwise inherit the user's, which the user can set without administrator rights
+/// (`HKCU\Environment`): a changed `windir` or `SystemRoot` has steered elevated programs
+/// before, and `COMPLUS_*`, `COR_*` or `__COMPAT_LAYER` change how programs load. Everything
+/// else is dropped. `windows` and `system32` come from the Windows API, never the environment.
+pub fn fixed_environment(windows: &str, system32: &str) -> Vec<(&'static str, String)> {
+    let drive = windows.get(..2).unwrap_or("C:").to_string();
+    vec![
+        ("SystemRoot", windows.to_string()),
+        ("windir", windows.to_string()),
+        ("SystemDrive", drive),
+        ("ComSpec", format!("{system32}\\cmd.exe")),
+        (
+            "PATH",
+            format!("{system32};{windows};{system32}\\Wbem;{system32}\\WindowsPowerShell\\v1.0"),
+        ),
+        ("PATHEXT", ".COM;.EXE".to_string()),
+        ("TEMP", format!("{windows}\\Temp")),
+        ("TMP", format!("{windows}\\Temp")),
+    ]
+}
+
 /// The accounts allowed to own, or write to, the helper and the folders it sits in: SYSTEM,
 /// the Administrators group, and TrustedInstaller (Windows' own installer service).
 pub const TRUSTED_SIDS: [&str; 3] = [
@@ -367,6 +389,43 @@ mod tests {
             });
         }
         assert_eq!(problem(&sec, Place::Own), None);
+    }
+
+    #[test]
+    fn the_helpers_environment_is_fixed_and_comes_from_windows_only() {
+        let env = fixed_environment("C:\\Windows", "C:\\Windows\\System32");
+        let names: Vec<&str> = env.iter().map(|(k, _)| *k).collect();
+        assert_eq!(
+            names,
+            [
+                "SystemRoot",
+                "windir",
+                "SystemDrive",
+                "ComSpec",
+                "PATH",
+                "PATHEXT",
+                "TEMP",
+                "TMP"
+            ]
+        );
+        for (name, value) in &env {
+            assert!(
+                value.starts_with("C:\\Windows") || *name == "SystemDrive" || *name == "PATHEXT",
+                "{name}={value}"
+            );
+            for bad in ["%", "Users", "AppData"] {
+                assert!(!value.contains(bad), "{name}={value}");
+            }
+        }
+        for dropped in [
+            "COMPLUS_",
+            "COR_",
+            "__COMPAT_LAYER",
+            "PSModulePath",
+            "USERPROFILE",
+        ] {
+            assert!(!names.iter().any(|n| n.starts_with(dropped)), "{dropped}");
+        }
     }
 
     #[test]

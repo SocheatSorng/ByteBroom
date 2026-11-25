@@ -3,7 +3,9 @@
 //! The window stays unelevated; when the owner asks for a red-tier action, it starts this
 //! helper through UAC with one action word. The helper, in this order:
 //!
-//! 1. loads DLLs from System32 only and makes System32 its current folder;
+//! 1. loads DLLs from System32 only, replaces its whole environment with a fixed one built
+//!    from the Windows API (no user-set variable survives), and makes System32 its current
+//!    folder;
 //! 2. takes exactly one action word from the fixed list, or stops (`BadArgs`);
 //! 3. checks that it lives in an admin-owned place, or stops (`UntrustedLocation`);
 //! 4. checks that it is elevated, or stops (`NotElevated`);
@@ -18,6 +20,7 @@ use bytebroom_core::admin::{AdminAction, Exit, parse_args};
 use bytebroom_core::restore::{RestorePoint, guarded};
 use bytebroom_core::win::admin::{
     enter_system32, is_elevated, load_dlls_from_system32_only, location_problem, own_exe,
+    reset_environment,
 };
 use bytebroom_core::win::restore::make_restore_point;
 use std::process::ExitCode;
@@ -46,12 +49,12 @@ fn run(action: AdminAction, make_point: impl FnOnce(&str) -> RestorePoint) -> Ex
         AdminAction::Noop => Exit::Done,
         // The restore point on its own; later actions use `guarded` the same way, with their
         // change as the second step.
-        AdminAction::RestorePoint => guarded(|| make_point(description), || Exit::Done),
+        AdminAction::RestorePoint => guarded(|| make_point(description), |_point| Exit::Done),
     }
 }
 
 fn main() -> ExitCode {
-    if !load_dlls_from_system32_only() || !enter_system32() {
+    if !load_dlls_from_system32_only() || !reset_environment() || !enter_system32() {
         return ExitCode::from(Exit::Failed.code());
     }
     let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
@@ -90,6 +93,30 @@ mod tests {
         });
         assert_eq!(exit, Exit::Done);
         assert!(!asked.get(), "the no-op makes no restore point");
+    }
+
+    /// Review S1: every action except the no-op must ask for a restore point first and stop
+    /// without one. A new action that skips the guard fails here at once.
+    #[test]
+    fn every_action_but_the_noop_stops_without_a_restore_point() {
+        for action in AdminAction::ALL {
+            if action == AdminAction::Noop {
+                continue;
+            }
+            for (point, expected) in [
+                (RestorePoint::Off, Exit::RestoreOff),
+                (RestorePoint::LowDisk, Exit::RestoreLowDisk),
+                (RestorePoint::Failed(5), Exit::RestoreFailed),
+            ] {
+                let asked = std::cell::Cell::new(false);
+                let exit = run(action, |_| {
+                    asked.set(true);
+                    point
+                });
+                assert!(asked.get(), "{action:?} must ask for a restore point");
+                assert_eq!(exit, expected, "{action:?} with {point:?}");
+            }
+        }
     }
 
     #[test]
