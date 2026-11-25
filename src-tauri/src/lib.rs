@@ -292,6 +292,28 @@ fn open_recycle_bin(layout: State<'_, Layout>) -> Reply<()> {
         .map_err(|_| CommandError::new("Explorer could not be opened"))
 }
 
+static RED_BUSY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Held while a red-tier action runs; released when dropped, even on an error.
+pub struct RedBusy(());
+
+impl RedBusy {
+    /// Take the one slot, or `None` if an action is already running.
+    pub fn take() -> Option<Self> {
+        use std::sync::atomic::Ordering;
+        RED_BUSY
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .ok()
+            .map(|_| Self(()))
+    }
+}
+
+impl Drop for RedBusy {
+    fn drop(&mut self) {
+        RED_BUSY.store(false, std::sync::atomic::Ordering::Release);
+    }
+}
+
 /// The red tier's actions and their texts (phase 4).
 #[tauri::command]
 fn red_actions() -> Vec<view::RedActionView> {
@@ -308,6 +330,13 @@ async fn run_red_action(
     layout: State<'_, Layout>,
     action: boundary::RedActionId,
 ) -> Reply<view::RedActionResult> {
+    // One red action at a time, whatever the page sends (security review S1): a page can't
+    // stack UAC prompts or run two helpers at once.
+    let Some(_busy) = RedBusy::take() else {
+        return Err(CommandError::new(
+            "another red-tier action is still running; nothing new was started",
+        ));
+    };
     let layout = layout.0.clone();
     let base = local_app_data(&layout);
     let message = tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
@@ -315,7 +344,7 @@ async fn run_red_action(
         match red.admin_action() {
             None => {
                 let verdict = confirm::ask_empty_recycle_bin(&app, base.as_ref());
-                if let Some(why) = confirm::refusal(verdict) {
+                if let Some(why) = confirm::empty_refusal(verdict) {
                     return Err(why.to_string());
                 }
                 let parent = confirm::main_window(&app).unwrap_or(0);

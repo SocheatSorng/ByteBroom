@@ -479,7 +479,7 @@ fn red_actions_ask_natively_before_acting() {
         .find("ask_empty_recycle_bin")
         .expect("asks before emptying");
     let refusal = body
-        .find("confirm::refusal(verdict)")
+        .find("confirm::empty_refusal(verdict)")
         .expect("acts on the answer");
     let empty = body
         .find("empty_recycle_bin(parent)")

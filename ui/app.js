@@ -436,14 +436,20 @@
       box.append(
         el(
           "div",
-          { className: "red-action" },
-          el("h4", { text: a.title }),
+          { className: "red-action", attrs: { role: "group", "aria-labelledby": `title-${a.id}` } },
+          el("h4", { id: `title-${a.id}`, text: a.title }),
+          // One line each for what it frees, the undo, the restore note and the admin prompt, so
+          // none of them is lost in a block of text. The same words as before, all still the
+          // input's description.
           el(
-            "p",
+            "div",
             { id: helpId, className: "red-action-text" },
-            `${a.frees} ${a.undo}`,
-            a.restoreNote ? ` ${a.restoreNote}` : "",
-            a.needsAdmin ? " Windows will ask for administrator rights." : "",
+            el("p", { text: a.frees }),
+            el("p", { className: "red-action-undo", text: a.undo }),
+            a.restoreNote ? el("p", { text: a.restoreNote }) : null,
+            a.needsAdmin
+              ? el("p", { className: "red-action-admin", text: "Windows will ask for administrator rights." })
+              : null,
           ),
           el(
             "div",
@@ -452,6 +458,9 @@
             input,
             button,
           ),
+          // The result, visible next to the card (the status line at the top may be scrolled
+          // away). Not a live region: setStatus already announces it once.
+          el("p", { id: `result-${a.id}`, className: "red-action-result", hidden: true }),
         ),
       );
     }
@@ -460,7 +469,14 @@
   async function runRedAction(a, input, button) {
     redBusy = true;
     for (const b of $("red-actions").querySelectorAll("button")) b.disabled = true;
-    setStatus(
+    const shown = $(`result-${a.id}`);
+    const show = (text, isError = false) => {
+      setStatus(text, isError);
+      shown.textContent = text;
+      shown.classList.toggle("error", isError);
+      shown.hidden = false;
+    };
+    show(
       a.needsAdmin
         ? `${a.title}: answer the Windows prompt. A restore point comes first; this can take a few minutes.`
         : `${a.title}: answer the Windows dialog.`,
@@ -468,9 +484,9 @@
     try {
       const result = await invoke("run_red_action", { action: a.id });
       renderRed(result.red);
-      setStatus(`${result.message} Sizes measured again.`);
+      show(`${result.message} Sizes measured again.`);
     } catch (e) {
-      setStatus(errorText(e), true);
+      show(errorText(e), true);
     } finally {
       redBusy = false;
       input.value = "";

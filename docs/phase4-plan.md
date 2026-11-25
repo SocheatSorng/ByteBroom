@@ -422,22 +422,41 @@ Each task: code → tests → fmt + clippy → full tests → build → commit w
     has a row, and the recipe never suggests deleting restore points or `/ResetBase`.
   - Task 4 adds the hibernation and Delivery Optimization actions to the helper; the test then
     requires their rows by action name too.
-- [ ] **4. Red actions, one per commit** (the set from decision 3), each with:
+- [x] **4. Red actions** (2026-11-25; one commit for both, to save time) (the set from decision 3), each with:
   - its plan table test;
   - a recorded-runner test;
   - its text for the window (what it frees, whether it can be undone).
-- [ ] **5. The window's red tier:**
+- [x] **5. The window's red tier** (2026-11-25):
   - buttons and the typed confirm (decision 7);
   - progress while the helper runs, the result and the sizes measured again;
   - the page sends only an action name, and the boundary test pins the new command.
 - [ ] ~~**6. Admin-only green items**~~: not in phase 4 (decision 6).
-- [ ] **7. Docs:**
+- [x] **7. Docs** (2026-11-25):
   - the README: elevation, each red action, the recovery recipe;
   - the spec's phase 4 row and open question;
   - the docs-drift test covers the new commands and messages.
-- [ ] **8. Security review** (`agent-skills:security-auditor`) of the helper, the elevation path,
+- [x] **8 and 9 done (2026-11-25).**
+  - **Security review:** no must-fix. Fixed with tests:
+    - **S1:** only one red action runs at a time, enforced in Rust (`RedBusy`), not just by the
+      page;
+    - **S2:** a test starts System32 PowerShell with the helper's exact switches and environment
+      and checks its module path holds only System32's and Program Files' module folders (no
+      Documents);
+    - **S3:** the Recycle Bin has its own refusal texts and log name (`empty-recycle-bin`);
+    - **N7:** COM is initialised around `SHEmptyRecycleBinW`.
+  - **Accepted risks (notes):**
+    - **N1:** elevated PowerShell still reads a few per-user settings (.NET logging, the JIT
+      profile, compatibility shims). None runs the user's code; profiles, PSReadLine, per-user
+      COM and the module cache are not used.
+    - **N5:** a program stopped after 3 minutes may have partly run (the cache is deleted by
+      the Delivery Optimization service). The answer is then `Failed`; measure the sizes again.
+  - **UI pass:** each card shows what it frees, the undo (bold), the restore note and the UAC
+    note on their own lines, as a labelled group. The label sits above its field. A disabled red
+    button has a dashed outline. Each card shows its own result line, as the top status line may
+    be scrolled away. Checked in light and dark, at about 800 px; contrast 5.9:1 and 7.5:1.
+- [x] **8. Security review** (`agent-skills:security-auditor`) of the helper, the elevation path,
   each action and the new command. Every must-fix is fixed with a test.
-- [ ] **9. UI and accessibility pass** on the red tier through the harness.
+- [x] **9. UI and accessibility pass** on the red tier through the harness.
 - [ ] **10. Owner check:**
   - first, a restore point the owner checks exists, and the recovery recipe at hand;
   - then the owner's real reproduction of the amber dialog (below);
@@ -534,6 +553,41 @@ The helper changed, so it is installed again. In your project folder:
    Windows allows one restore point a day, so this time it reuses the one from step 3, and
    rstrui shows no second "ByteBroom" point.
 6. Tell Claude what steps 3 and 5 printed, and what rstrui showed at the top (name and date).
+
+## Owner check for task 10 (the red actions)
+
+One action at a time, in this order. Keep `docs/recovery.md` at hand. Run everything from your
+project folder, with this branch's build: start `target\release\bytebroom.exe`, never another
+copy.
+
+1. **Prepare** (ordinary PowerShell): `./build.ps1`. Then, in an **administrator** PowerShell:
+   `./tools/install-helper.ps1`, and close that window. Make sure C: has several GB free.
+2. **Fresh restore point** (after 19:23 on 2026-11-26, so Windows doesn't reuse one): run
+   `cargo run --release -p bytebroom-admin --example elevate_restore_point`, check **Show more
+   details**, click **Yes**. Expected `Answer: Done (done)`, and `rstrui.exe` lists "ByteBroom:
+   restore point on request".
+3. **Recycle Bin** (no UAC): start `target\release\bytebroom.exe`, type `recycle bin` in its card,
+   press **Empty the Recycle Bin**.
+   - First press **Cancel** in "ByteBroom: empty the Recycle Bin?": the status says nothing was
+     cleaned, and the bin is unchanged.
+   - Then again, read the dialog, and press **Empty it**: the bin is empty and the red sizes are
+     measured again.
+4. **Hibernation** (UAC): type `hibernation`, press **Turn hibernation off**.
+   - On the UAC prompt, **Show more details** must read
+     `"C:\Program Files\ByteBroom\bytebroom-admin.exe" hibernation-off`. Click **No** first:
+     "Cancelled at the Windows prompt: nothing was changed."
+   - Then again with **Yes**. Expected "Turn hibernation off: done." after the restore point
+     (it may reuse step 2's).
+   - Undo it as the recipe says: `powercfg /hibernate on` in an administrator PowerShell.
+5. **Delivery Optimization** (UAC): type `delivery optimization`, press the button; the prompt
+   must read `... bytebroom-admin.exe" delivery-optimization-cache`; click **Yes**. Expected
+   "Clear the Delivery Optimization cache: done."
+6. Tell Claude what each step showed. Claude checks read-only: `powercfg /a` (hibernation off,
+   then on again), the Delivery Optimization cache size, `rstrui.exe` / the System Restore and
+   VSS event logs, and `ByteBroom\bytebroom.log` (the Recycle Bin dialog's answers).
+
+Then, on your yes, Claude merges `phase-4-elevation` into `main` with `--ff-only` and runs the
+checks and the build on `main` again.
 
 ## Risks
 

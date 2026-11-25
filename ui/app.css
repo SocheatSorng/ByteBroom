@@ -453,8 +453,13 @@ select {
 }
 
 .red-actions-h {
-  margin: 16px 0 4px;
-  font-size: 1rem;
+  margin: 18px 0 2px;
+  font-size: 14px;
+}
+
+/* The note under the heading lines up with the cards, not indented like the tier notes. */
+.red-actions-h + .note {
+  margin: 0 0 10px;
 }
 
 .red-actions {
@@ -463,33 +468,71 @@ select {
 }
 
 .red-action {
-  padding: 10px 12px;
+  padding: 12px 14px;
   background: var(--panel);
   border: 1px solid var(--line);
   border-left: 4px solid var(--red);
-  border-radius: 5px;
+  border-radius: 6px;
 }
 
 .red-action h4 {
-  margin: 0 0 4px;
-  font-size: 0.95rem;
+  margin: 0 0 6px;
+  font-size: 14px;
+  font-weight: 600;
 }
 
 .red-action-text {
-  margin: 0 0 8px;
-  color: var(--muted);
+  margin: 0 0 10px;
 }
 
+.red-action-text p {
+  margin: 0 0 3px;
+}
+
+/* What it frees and how to undo it read first; the restore and administrator notes follow. */
+.red-action-undo {
+  font-weight: 600;
+}
+
+.red-action-text p:not(:first-child):not(.red-action-undo) {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* The label sits above its field so every card's field and button line up, at any width. */
 .red-action-row {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 6px 8px;
+}
+
+.red-action-row label {
+  flex: 1 1 100%;
+  font-size: 13px;
 }
 
 .red-action-row input {
-  flex: 1 1 160px;
+  flex: 1 1 200px;
   min-width: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--control-edge);
+  border-radius: 6px;
+  background: var(--panel);
+}
+
+.red-action-row button {
+  flex: 0 1 auto;
+  max-width: 100%;
+}
+
+/* Until the word is typed the button is plainly unavailable: no red fill, a dashed edge and
+   readable muted text, instead of a faded red that looks almost ready. */
+.red-action-row button.danger:disabled {
+  opacity: 1;
+  background: var(--panel);
+  border: 1px dashed var(--control-edge);
+  color: var(--muted);
 }
 
 .side {
@@ -630,4 +673,12 @@ label.confirm,
   overflow: hidden;
   clip-path: inset(50%);
   white-space: nowrap;
+}
+
+.red-action-result {
+  margin: 8px 0 0;
+}
+
+.red-action-result.error {
+  color: var(--danger);
 }
