@@ -361,6 +361,21 @@ Each task: code → tests → fmt + clippy → full tests → build → commit w
 7. Tell Claude. Claude reads `ByteBroom\bytebroom.log` in your local app data (two lines,
    `Cancelled` and `Clean`, with how long the dialog was open).
 
+**Result of steps 1–5 (2026-11-25), passed.** The fixed build (this branch's
+`target\release\bytebroom.exe`), with one amber item (246 MB, Recycle Bin):
+
+- Windows' dialog opened over the ByteBroom window, centred on it, with **Cancel** as the
+  default. The window behind didn't respond to clicks while it was open.
+- **Cancel:** logged `parent=main window answer=Cancel open_ms=4615 Cancelled`. Nothing was
+  cleaned.
+- **Clean them,** after reading: logged `answer=Confirm open_ms=72094 Clean`. The file was in the
+  Recycle Bin, from its original folder (checked read-only).
+- **First try:** the owner ran the main checkout's phase 3 build by mistake. It has the old
+  dialog and writes no log, which is how the mix-up showed. Owner steps now name the exact
+  program to start.
+- **Still to run:** step 6, the opt-in one-file Recycle Bin test, which proves the
+  `IFileOperation` path.
+
 ## Owner check for task 1 (the UAC round trip)
 
 In your project folder:
