@@ -382,6 +382,16 @@ In your project folder:
 
 To remove the helper: run `./tools/uninstall-helper.ps1` in an administrator PowerShell.
 
+**Result (2026-11-25), passed:**
+- **Install:** `C:\Program Files\ByteBroom` holds only `bytebroom-admin.exe`. Its SHA-256 matches the
+  build, and both the folder and the file pass the admin-owned rule. Run unelevated, the
+  installed helper passes its own location check and stops with exit 4 ("not elevated").
+- **UAC round trip,** from an ordinary console: Yes gave `Answer: Done (done)`, No gave
+  `Not run: Cancelled`. So the machine-wide (HKLM) `runas` lookup works.
+- **Lesson:** a first try ran the harness from the administrator console used for the install.
+  An already-elevated program starts the helper with no prompt, so both runs said `Done`. Every
+  later owner step names which console to use.
+
 ## Risks
 
 - **The elevated helper is attacked from the unelevated side:**
