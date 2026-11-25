@@ -5,9 +5,10 @@
 //! drive, or when the item is bigger than the bin's maximum size. [`preflight`] refuses all of
 //! those up front; after recycling, the engine also checks that the bin grew by the item's size.
 
-use crate::engine::{Outcome, SkipReason, Skipped};
+use crate::engine::{Outcome, SkipReason, Skipped, Target, not_as_expected};
 use crate::paths::WinPath;
 use crate::policy::Policy;
+use crate::scan::FileIdentity;
 use crate::win::dir::{LockedDir, lock_dir};
 use crate::win::{self, Access};
 use std::collections::HashMap;
@@ -85,18 +86,62 @@ pub fn preflight(facts: &BinFacts, item_bytes: u64) -> Result<(), RecycleRefusal
 /// Send each target to the Recycle Bin, within `policy`. Recycling on the same drive frees no
 /// space until the bin is emptied, so `bytes_freed` stays 0 and `bytes_recycled` counts instead.
 pub fn recycle(policy: &Policy, targets: &[WinPath]) -> Outcome {
+    let targets: Vec<Target> = targets.iter().map(Target::any).collect();
+    recycle_targets(policy, &targets)
+}
+
+/// Like [`recycle`], and each file with a recorded identity must still have it.
+///
+/// The shell recycles by path, so it can't use our handle (security review note 3). What is
+/// done instead: the identity is compared on the handle that passed the policy, while every
+/// folder above the item is held (no folder can be swapped); a second handle that only reads
+/// attributes (so it never blocks the shell) stays on the checked file while the shell runs;
+/// afterwards that handle must show the checked file inside the drive's Recycle Bin. What is
+/// left: a same-folder rename in the instant before the shell opens the path would make the
+/// shell recycle another file. That file is then in the Recycle Bin (restorable), and the
+/// result says so.
+pub fn recycle_targets(policy: &Policy, targets: &[Target]) -> Outcome {
+    recycle_with(policy, targets, &win::recycle::shell_recycle)
+}
+
+/// [`recycle_targets`] with the shell call passed in, so tests can check what reaches the
+/// shell without ever using a real Recycle Bin.
+pub fn recycle_with(
+    policy: &Policy,
+    targets: &[Target],
+    shell: &dyn Fn(&WinPath) -> Result<(), i32>,
+) -> Outcome {
     let mut out = Outcome::default();
     let mut facts: HashMap<char, BinFacts> = HashMap::new();
     for target in targets {
-        recycle_one(policy, target, 0, &mut facts, &mut out);
+        recycle_one(
+            policy,
+            &target.path,
+            target.expect.as_ref(),
+            0,
+            shell,
+            &mut facts,
+            &mut out,
+        );
     }
     out
 }
 
+/// True when `path` is inside the Recycle Bin of its own drive (`X:\$Recycle.Bin\...`). Pure.
+pub fn is_in_recycle_bin(path: &WinPath) -> bool {
+    path.parts()
+        .first()
+        .is_some_and(|top| top.eq_ignore_ascii_case("$Recycle.Bin"))
+        && path.parts().len() > 1
+}
+
+#[allow(clippy::too_many_arguments)]
 fn recycle_one(
     policy: &Policy,
     path: &WinPath,
+    expect: Option<&FileIdentity>,
     depth: usize,
+    shell: &dyn Fn(&WinPath) -> Result<(), i32>,
     facts: &mut HashMap<char, BinFacts>,
     out: &mut Outcome,
 ) {
@@ -143,12 +188,33 @@ fn recycle_one(
         ));
         return;
     }
+    if let Some(what) = expect.and_then(|e| not_as_expected(&opened, e)) {
+        out.skipped
+            .push(skip(path, SkipReason::ChangedSinceScan(what)));
+        return;
+    }
     let size = if is_directory {
         win::recycle::measure(&real)
     } else {
         opened.size
     };
-    // Close our handle on the item itself: the shell must be able to move it.
+    // A file with a recorded identity is watched while the shell runs, through a handle that
+    // only reads attributes: such a handle never blocks the shell from moving the file. It must
+    // be the same file the checked handle has open.
+    let watch = match expect {
+        None => None,
+        Some(_) => match win::open_no_follow(&real, Access::Inspect) {
+            Ok(w) if w.file_id().is_some() && w.file_id() == opened.file_id() => Some(w),
+            _ => {
+                out.skipped.push(skip(
+                    path,
+                    SkipReason::ChangedSinceScan("another file is in its place"),
+                ));
+                return;
+            }
+        },
+    };
+    // Close our delete handle on the item itself: the shell must be able to move it.
     drop(opened);
 
     let bin = facts
@@ -162,9 +228,22 @@ fn recycle_one(
     }
 
     let before = win::recycle::bin_size(drive);
-    match win::recycle::shell_recycle(&real) {
+    match shell(&real) {
         Ok(()) if !win::recycle::exists(&real) => {
             let after = win::recycle::bin_size(drive);
+            // Where is the file we checked now? It must be the one in the Recycle Bin.
+            let now = watch.as_ref().map(win::Opened::current_path);
+            if now.is_some_and(|now| !matches!(&now, Ok(p) if is_in_recycle_bin(p))) {
+                out.removed.push(real.clone());
+                out.warnings.push(skip(
+                    &real,
+                    SkipReason::Failed(
+                        "another file took its place just before it was recycled: check the Recycle Bin and restore what you did not mean to clean"
+                            .into(),
+                    ),
+                ));
+                return;
+            }
             match (before, after) {
                 (Some(b), Some(a)) if a.saturating_sub(b) >= size => {
                     out.removed.push(real);
@@ -190,7 +269,9 @@ fn recycle_one(
                 Ok(names) => {
                     for name in names {
                         match real.join(&name) {
-                            Ok(child) => recycle_one(policy, &child, depth + 1, facts, out),
+                            Ok(child) => {
+                                recycle_one(policy, &child, None, depth + 1, shell, facts, out)
+                            }
                             Err(e) => out.skipped.push(skip(
                                 &real,
                                 SkipReason::Unsupported(format!("{name:?}: {e}")),

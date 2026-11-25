@@ -7,7 +7,7 @@
 mod common;
 
 use bytebroom_core::act::{ActionResult, Context, carry_out};
-use bytebroom_core::engine::{Outcome, SkipReason};
+use bytebroom_core::engine::{Outcome, SkipReason, Target};
 use bytebroom_core::locations::Locations;
 use bytebroom_core::paths::WinPath;
 use bytebroom_core::policy::{Policy, SystemLayout};
@@ -15,7 +15,7 @@ use bytebroom_core::preview::{Action, Choice, Preview, preview};
 use bytebroom_core::rules::DUPLICATE_MIN_BYTES;
 use bytebroom_core::scan::{Finding, ScanOptions, scan};
 use bytebroom_core::win::{Access, open_no_follow, system_layout};
-use common::{CleanDir, powershell_sha256, snapshot, verify_tree, write_file};
+use common::{CleanDir, journal_at, powershell_sha256, snapshot, verify_tree, write_file};
 use std::cell::RefCell;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
@@ -121,13 +121,13 @@ impl Home {
 }
 
 /// Carry out with a stand-in Recycle Bin that only records what it was given.
-fn run(h: &Home, findings: &[Finding], pv: &Preview) -> (Vec<ActionResult>, Vec<WinPath>) {
+fn run(h: &Home, findings: &[Finding], pv: &Preview) -> (Vec<ActionResult>, Vec<Target>) {
     let recycled = RefCell::new(Vec::new());
-    let recycle = |_: &Policy, targets: &[WinPath]| {
+    let recycle = |_: &Policy, targets: &[Target]| {
         recycled.borrow_mut().extend(targets.iter().cloned());
         Outcome::default()
     };
-    let journal = h.journal();
+    let journal = journal_at(&h.journal());
     let ctx = Context {
         layout: &h.layout(),
         now: h.later(),
@@ -201,7 +201,9 @@ fn permanent_delete_removes_exactly_the_confirmed_items() {
     .collect();
     expected.sort();
     // The snapshots themselves are written into the folder too; ignore those lines.
-    removed.retain(|l| !l.contains("before") && !l.contains("after"));
+    // The journal is opened (created empty) before any clean, as the app does.
+    removed
+        .retain(|l| !l.contains("before") && !l.contains("after") && l != "added: moves.journal");
     assert_eq!(removed, expected);
 }
 
@@ -466,10 +468,18 @@ fn recycling_goes_only_through_the_given_bin_and_only_checked_items() {
     let before = snapshot(&h.dir.0, "before", &h.dir.0);
     let (results, recycled) = run(&h, &findings, &pv);
     let after = snapshot(&h.dir.0, "after", &h.dir.0);
-    assert_eq!(recycled, vec![findings[a].path.clone()]);
+    // The file's scan identity goes with it, for the bin to check on its own handle.
+    assert_eq!(
+        recycled,
+        vec![Target {
+            path: findings[a].path.clone(),
+            expect: findings[a].identity,
+        }]
+    );
+    assert!(findings[a].identity.is_some());
     assert_eq!(skipped_reasons(&results).len(), 1);
     // The stand-in removed nothing; neither did anything else.
     let mut diff = changes(&before, &after);
-    diff.retain(|l| !l.contains("before") && !l.contains("after"));
+    diff.retain(|l| !l.contains("before") && !l.contains("after") && l != "added: moves.journal");
     assert!(diff.is_empty(), "{diff:?}");
 }

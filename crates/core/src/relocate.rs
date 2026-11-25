@@ -9,13 +9,14 @@
 //! destination folder is held locked for the whole move, every copy is created inside that held
 //! handle, and copies are verified and removed through their own handles.
 
-use crate::engine::{MAX_DEPTH, Outcome, SkipReason, Skipped};
+use crate::engine::{MAX_DEPTH, Outcome, SkipReason, Skipped, Target, not_as_expected};
 use crate::paths::WinPath;
 use crate::policy::{Policy, denied_reason};
+use crate::scan::FileIdentity;
 use crate::win::dir::{CreateError, Created, LockedDir, lock_dir};
 use crate::win::hash::Sha256;
 use crate::win::{self, Access, Opened};
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -78,6 +79,55 @@ impl JournalEntry {
 pub fn read_journal(path: &Path) -> io::Result<Vec<JournalEntry>> {
     let text = std::fs::read_to_string(path)?;
     Ok(text.lines().filter_map(JournalEntry::parse).collect())
+}
+
+/// The move journal, held open for appending. It is opened inside a held folder without
+/// following any link, and must not be a hard link (security review note 7): run as
+/// administrator, ByteBroom must never be steered into writing somewhere else.
+#[derive(Debug)]
+pub struct Journal {
+    file: File,
+    /// Where it is.
+    pub path: WinPath,
+}
+
+impl Journal {
+    /// Open (or create) the journal `name` inside the held folder `dir`.
+    pub fn open(dir: &LockedDir, name: &str) -> Result<Self, String> {
+        let (file, path) = dir.open_append(name).map_err(|e| e.to_string())?;
+        Ok(Self { file, path })
+    }
+
+    /// Add one entry and make sure it is on disk.
+    pub fn append(&self, entry: &JournalEntry) -> Result<(), String> {
+        let mut file = &self.file;
+        writeln!(file, "{}", entry.to_line()).map_err(|e| e.to_string())?;
+        self.file.sync_all().map_err(|e| e.to_string())
+    }
+
+    /// Every valid entry, oldest first, read through the held handle.
+    pub fn entries(&self) -> io::Result<Vec<JournalEntry>> {
+        use std::io::{Seek, SeekFrom};
+        let mut file = self.file.try_clone()?;
+        file.seek(SeekFrom::Start(0))?;
+        let mut text = String::new();
+        file.read_to_string(&mut text)?;
+        Ok(text.lines().filter_map(JournalEntry::parse).collect())
+    }
+}
+
+/// ByteBroom's own folder, `<base>\ByteBroom` (base: the owner's local app data), reached
+/// without following any link and held locked. `base` itself must be a real folder at exactly
+/// that path, so a junction anywhere on the way is refused (security review note 7).
+pub fn app_folder(base: &WinPath) -> Result<LockedDir, String> {
+    let held = lock_dir(base).map_err(|e| format!("{base}: {e}"))?;
+    if held.path != *base {
+        return Err(format!(
+            "{base} is reached through a link; ByteBroom won't use it"
+        ));
+    }
+    held.open_or_create_dir("ByteBroom")
+        .map_err(|e| e.to_string())
 }
 
 /// The steps of one file move. The real implementation is [`RealMove`]; tests use fakes.
@@ -212,14 +262,19 @@ pub struct RealMove<'a> {
     source_path: WinPath,
     dest_dir: &'a LockedDir,
     name: String,
-    journal: &'a Path,
+    journal: &'a Journal,
     /// Only a file this move created; removed through its own handle.
     created: Option<Created>,
 }
 
 impl<'a> RealMove<'a> {
     /// `source` must have been opened with [`Access::Move`] and checked against the policy.
-    pub fn new(source: Opened, name: String, dest_dir: &'a LockedDir, journal: &'a Path) -> Self {
+    pub fn new(
+        source: Opened,
+        name: String,
+        dest_dir: &'a LockedDir,
+        journal: &'a Journal,
+    ) -> Self {
         let source_path = source.resolved.final_path.clone();
         Self {
             source: Some(source),
@@ -273,16 +328,7 @@ impl MoveSteps for RealMove<'_> {
             source: self.source_path.clone(),
             dest,
         };
-        if let Some(parent) = self.journal.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(self.journal)
-            .map_err(|e| e.to_string())?;
-        writeln!(file, "{}", entry.to_line()).map_err(|e| e.to_string())?;
-        file.sync_all().map_err(|e| e.to_string())
+        self.journal.append(&entry)
     }
 
     fn delete_source(&mut self) -> Result<(), String> {
@@ -304,13 +350,26 @@ pub fn move_to(
     policy: &Policy,
     targets: &[WinPath],
     dest_dir: &WinPath,
-    journal: &Path,
+    journal: &Journal,
+) -> Outcome {
+    let targets: Vec<Target> = targets.iter().map(Target::any).collect();
+    move_targets(policy, &targets, dest_dir, journal)
+}
+
+/// Like [`move_to`], and each file with a recorded identity must still have it on the handle
+/// the copy is read from and the original deleted through.
+pub fn move_targets(
+    policy: &Policy,
+    targets: &[Target],
+    dest_dir: &WinPath,
+    journal: &Journal,
 ) -> Outcome {
     let mut out = Outcome::default();
-    let dest = match check_destination(policy, targets, dest_dir) {
+    let paths: Vec<WinPath> = targets.iter().map(|t| t.path.clone()).collect();
+    let dest = match check_destination(policy, &paths, dest_dir) {
         Ok(d) => d,
         Err(why) => {
-            for t in targets {
+            for t in &paths {
                 out.skipped.push(Skipped {
                     path: t.clone(),
                     reason: SkipReason::Unsupported(why.clone()),
@@ -320,7 +379,15 @@ pub fn move_to(
         }
     };
     for target in targets {
-        move_one(policy, target, &dest, journal, 0, &mut out);
+        move_one(
+            policy,
+            &target.path,
+            target.expect.as_ref(),
+            &dest,
+            journal,
+            0,
+            &mut out,
+        );
     }
     out
 }
@@ -354,8 +421,9 @@ fn skip(out: &mut Outcome, path: &WinPath, reason: SkipReason) {
 fn move_one(
     policy: &Policy,
     path: &WinPath,
+    expect: Option<&FileIdentity>,
     dest_dir: &LockedDir,
-    journal: &Path,
+    journal: &Journal,
     depth: usize,
     out: &mut Outcome,
 ) -> bool {
@@ -372,6 +440,12 @@ fn move_one(
     };
     if let Err(r) = policy.check_target(&opened.resolved) {
         skip(out, path, SkipReason::Refused(r));
+        return false;
+    }
+    // On the handle the copy is read from: it refuses write-sharing, so the bytes copied are
+    // those of the file that matched.
+    if let Some(what) = expect.and_then(|e| not_as_expected(&opened, e)) {
+        skip(out, path, SkipReason::ChangedSinceScan(what));
         return false;
     }
     let real = opened.resolved.final_path.clone();
@@ -427,7 +501,7 @@ fn move_one(
     for child_name in names {
         match real.join(&child_name) {
             Ok(child) => {
-                let gone = move_one(policy, &child, &new_dir, journal, depth + 1, out);
+                let gone = move_one(policy, &child, None, &new_dir, journal, depth + 1, out);
                 all_gone &= gone;
                 moved_any |= gone;
             }

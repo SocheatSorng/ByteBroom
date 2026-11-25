@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 pub mod boundary;
+pub mod confirm;
 pub mod session;
 pub mod view;
 
@@ -127,13 +128,17 @@ pub fn destination_problem(
     denied_reason(dest, layout).map(|why| format!("that folder is protected ({why})"))
 }
 
-/// Where moves are journalled: `ByteBroom\moves.journal` in the owner's local app data, outside
-/// any repo. `None` when that folder can't be found or made.
-fn journal_path(layout: &SystemLayout) -> Option<std::path::PathBuf> {
-    let at = bytebroom_core::win::locations::locations(layout);
-    let dir = std::path::PathBuf::from(at.local_app_data?.to_string()).join("ByteBroom");
-    std::fs::create_dir_all(&dir).ok()?;
-    Some(dir.join("moves.journal"))
+/// The owner's local app data folder, where ByteBroom keeps its journal and log.
+fn local_app_data(layout: &SystemLayout) -> Option<WinPath> {
+    bytebroom_core::win::locations::locations(layout).local_app_data
+}
+
+/// The move journal, `ByteBroom\moves.journal` in the owner's local app data, outside any repo.
+/// The folder and file are opened without following links (security review note 7).
+fn open_journal(layout: &SystemLayout) -> Result<bytebroom_core::relocate::Journal, String> {
+    let base = local_app_data(layout).ok_or("local app data can't be found")?;
+    let dir = bytebroom_core::relocate::app_folder(&base)?;
+    bytebroom_core::relocate::Journal::open(&dir, "moves.journal")
 }
 
 /// Act on exactly the confirmed preview, once: Rust takes the preview it built (the page sends
@@ -141,7 +146,8 @@ fn journal_path(layout: &SystemLayout) -> Option<std::path::PathBuf> {
 ///
 /// The page's confirmations are for the owner's convenience; this is the one a page can't skip.
 /// When the preview touches any amber item (the owner's own files), Rust asks again in Windows'
-/// own dialog, with the count and size, before anything is done (security review).
+/// own dialog, over the main window, with the count and size, before anything is done
+/// (security review). Only "Clean them", pressed after reading, goes ahead; see `confirm`.
 #[tauri::command]
 async fn clean(
     app: AppHandle,
@@ -149,40 +155,30 @@ async fn clean(
     layout: State<'_, Layout>,
     preview_id: PreviewId,
 ) -> Reply<CleanView> {
-    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
-
     let (ready, guard) = session
         .take_preview(preview_id)
         .map_err(|e| CommandError::new(&e))?;
     if let Some(question) = amber_question(&ready) {
-        let yes = app
-            .dialog()
-            .message(question)
-            .title("ByteBroom: clean your own files?")
-            .kind(MessageDialogKind::Warning)
-            .buttons(MessageDialogButtons::OkCancelCustom(
-                "Clean them".into(),
-                "Cancel".into(),
-            ))
-            .blocking_show();
-        if !yes {
+        let items = ready.preview.confirm_amber.len();
+        let verdict = confirm::ask(&app, question, items, local_app_data(&layout.0).as_ref());
+        if let Some(why) = confirm::refusal(verdict) {
             guard.nothing_done();
-            return Err(CommandError::new(
-                "cancelled: nothing was cleaned. Preview again to choose.",
-            ));
+            return Err(CommandError::new(why));
         }
     }
     let layout = layout.0.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = guard;
-        let journal = journal_path(&layout).ok_or_else(|| {
-            CommandError::new("ByteBroom's folder in local app data can't be made")
+        let journal = open_journal(&layout).map_err(|why| {
+            CommandError::new(&format!(
+                "nothing was cleaned: ByteBroom's folder in local app data can't be used ({why})"
+            ))
         })?;
         let ctx = bytebroom_core::act::Context {
             layout: &layout,
             now: SystemTime::now(),
             journal: &journal,
-            recycle: &bytebroom_core::recycle::recycle,
+            recycle: &bytebroom_core::recycle::recycle_targets,
         };
         let results = bytebroom_core::act::carry_out(&ready.findings, &ready.preview, &ctx);
         Ok(view::clean_view(&results, ready.preview.move_to.as_ref()))

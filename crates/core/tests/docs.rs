@@ -210,10 +210,15 @@ fn the_window_commands_and_promises_match_the_code() {
         );
     }
 
-    // The move journal is where the README says.
+    // The move journal and the log are where the README says.
     let lib = read("src-tauri/src/lib.rs");
+    let relocate = read("crates/core/src/relocate.rs");
+    let confirm = read("src-tauri/src/confirm.rs");
     assert!(readme.contains("`ByteBroom\\moves.journal`"));
-    assert!(lib.contains(".join(\"ByteBroom\")") && lib.contains("\"moves.journal\""));
+    assert!(relocate.contains("open_or_create_dir(\"ByteBroom\")"));
+    assert!(lib.contains("\"moves.journal\""));
+    assert!(readme.contains("`ByteBroom\\bytebroom.log`"));
+    assert!(confirm.contains("\"bytebroom.log\""));
 
     // The Recycle Bin warning, in the README and in the preview.
     assert!(readme.contains("recycling frees nothing by itself"));

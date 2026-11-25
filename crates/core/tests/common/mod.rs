@@ -45,6 +45,20 @@ pub fn unique_dir(tag: &str) -> PathBuf {
     dir
 }
 
+/// The move journal at `path` (inside a test folder), opened the way the app opens it.
+pub fn journal_at(path: &Path) -> bytebroom_core::relocate::Journal {
+    assert!(
+        path.starts_with(tests_base()),
+        "journal outside the tests base"
+    );
+    let dir = path.parent().unwrap();
+    fs::create_dir_all(dir).unwrap();
+    let dir = bytebroom_core::paths::WinPath::parse(dir.to_str().unwrap()).unwrap();
+    let held = bytebroom_core::win::dir::lock_dir(&dir).unwrap();
+    let name = path.file_name().unwrap().to_str().unwrap();
+    bytebroom_core::relocate::Journal::open(&held, name).unwrap()
+}
+
 pub fn write_file(path: &Path, bytes: &[u8]) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     let mut f = File::create(path).unwrap();

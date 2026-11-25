@@ -31,7 +31,12 @@ fn act_recycle(p: &Policy, t: &[WinPath], _: &FakeTree) -> Outcome {
 fn act_move(p: &Policy, t: &[WinPath], tree: &FakeTree) -> Outcome {
     let dest = tree.base.join("dest");
     fs::create_dir_all(&dest).unwrap();
-    move_to(p, t, &wp(&dest), &tree.base.join("journal.log"))
+    move_to(
+        p,
+        t,
+        &wp(&dest),
+        &journal_at(&tree.base.join("journal.log")),
+    )
 }
 
 #[test]

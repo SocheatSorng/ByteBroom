@@ -19,4 +19,12 @@ fn main() {
             .app_manifest(tauri_build::AppManifest::new().commands(COMMANDS)),
     )
     .expect("tauri build step");
+    // tauri-build links the app manifest (Common Controls v6, needed by Windows' task dialog)
+    // into the app's binaries only. The dialog harness in examples/ needs it too, or it can't
+    // even start (STATUS_ENTRYPOINT_NOT_FOUND).
+    let out = std::env::var("OUT_DIR").expect("OUT_DIR");
+    let resource = std::path::Path::new(&out).join("resource.lib");
+    if resource.exists() {
+        println!("cargo:rustc-link-arg-examples={}", resource.display());
+    }
 }

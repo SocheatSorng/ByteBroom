@@ -20,8 +20,9 @@ use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use windows_sys::Wdk::Foundation::OBJECT_ATTRIBUTES;
 use windows_sys::Wdk::Storage::FileSystem::{
-    FILE_CREATE, FILE_DIRECTORY_FILE, FILE_NON_DIRECTORY_FILE, FILE_OPEN, FILE_OPEN_REPARSE_POINT,
-    FILE_SYNCHRONOUS_IO_NONALERT, NtCreateFile, RtlNtStatusToDosErrorNoTeb,
+    FILE_CREATE, FILE_DIRECTORY_FILE, FILE_NON_DIRECTORY_FILE, FILE_OPEN, FILE_OPEN_IF,
+    FILE_OPEN_REPARSE_POINT, FILE_SYNCHRONOUS_IO_NONALERT, NtCreateFile,
+    RtlNtStatusToDosErrorNoTeb,
 };
 use windows_sys::Win32::Foundation::{
     GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE, OBJ_CASE_INSENSITIVE,
@@ -29,10 +30,10 @@ use windows_sys::Win32::Foundation::{
 };
 use windows_sys::Win32::Storage::FileSystem::{
     BY_HANDLE_FILE_INFORMATION, CreateFileW, DELETE, FILE_ADD_FILE, FILE_ADD_SUBDIRECTORY,
-    FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT,
-    FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_LIST_DIRECTORY,
-    FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_TRAVERSE,
-    GetFileInformationByHandle, OPEN_EXISTING, SYNCHRONIZE,
+    FILE_APPEND_DATA, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL,
+    FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+    FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES, FILE_READ_DATA, FILE_SHARE_DELETE, FILE_SHARE_READ,
+    FILE_SHARE_WRITE, FILE_TRAVERSE, GetFileInformationByHandle, OPEN_EXISTING, SYNCHRONIZE,
 };
 use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
 
@@ -269,6 +270,87 @@ impl LockedDir {
     /// Remove this folder if it is empty (it was created by [`Self::create_dir`]).
     pub fn remove_if_empty(self) -> io::Result<()> {
         dispose(&self.handle)
+    }
+
+    /// Open `name` in this folder if it exists, or create it, relative to the held handle and
+    /// never following a link (security review note 7). Whatever is found must be a real
+    /// object of the asked kind, at exactly the expected path, or it is refused and left alone:
+    /// nothing found here is ever deleted.
+    fn open_or_create(
+        &self,
+        name: &str,
+        access: u32,
+        share: u32,
+        options: u32,
+    ) -> Result<(OwnedHandle, WinPath, BY_HANDLE_FILE_INFORMATION), CreateError> {
+        let expected = self
+            .path
+            .join(name)
+            .map_err(|e| CreateError::BadName(e.to_string()))?;
+        let (status, raw) = self.raw_open(name, access, share, FILE_OPEN_IF, options)?;
+        if status < 0 || raw.is_null() {
+            // SAFETY: plain conversion of a status code.
+            let code = unsafe { RtlNtStatusToDosErrorNoTeb(status) };
+            return Err(CreateError::Other(io::Error::from_raw_os_error(
+                code as i32,
+            )));
+        }
+        // SAFETY: NtCreateFile succeeded, so `raw` is a handle we own.
+        let handle = unsafe { OwnedHandle::from_raw_handle(raw) };
+        let facts = info(&handle).map_err(CreateError::Other)?;
+        if facts.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(CreateError::Other(io::Error::other(format!(
+                "{expected} is a link; ByteBroom never follows links"
+            ))));
+        }
+        let real =
+            final_path(&handle).map_err(|e| CreateError::Other(io::Error::other(e.to_string())))?;
+        if real != expected {
+            return Err(CreateError::Other(io::Error::other(format!(
+                "{expected} is not where it should be"
+            ))));
+        }
+        Ok((handle, real, facts))
+    }
+
+    /// Open the folder `name` in this folder, creating it if needed, and hold it locked. A link
+    /// (junction or symlink) in its place is refused, never followed.
+    pub fn open_or_create_dir(&self, name: &str) -> Result<LockedDir, CreateError> {
+        let (handle, path, facts) = self.open_or_create(
+            name,
+            FILE_LIST_DIRECTORY
+                | FILE_TRAVERSE
+                | FILE_ADD_FILE
+                | FILE_ADD_SUBDIRECTORY
+                | FILE_READ_ATTRIBUTES
+                | SYNCHRONIZE,
+            // No FILE_SHARE_DELETE: held like every other locked folder.
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            FILE_DIRECTORY_FILE,
+        )?;
+        Ok(LockedDir {
+            handle,
+            path,
+            volume_serial: facts.dwVolumeSerialNumber,
+        })
+    }
+
+    /// Open the file `name` in this folder for appending (and reading back), creating it if
+    /// needed. A link in its place is refused, and so is a file with other hard links, which
+    /// could be another file's contents under this name.
+    pub fn open_append(&self, name: &str) -> Result<(std::fs::File, WinPath), CreateError> {
+        let (handle, path, facts) = self.open_or_create(
+            name,
+            FILE_APPEND_DATA | FILE_READ_DATA | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+            FILE_SHARE_READ,
+            FILE_NON_DIRECTORY_FILE,
+        )?;
+        if facts.nNumberOfLinks != 1 {
+            return Err(CreateError::Other(io::Error::other(format!(
+                "{path} has other names (hard links); ByteBroom won't write to it"
+            ))));
+        }
+        Ok((std::fs::File::from(handle), path))
     }
 }
 

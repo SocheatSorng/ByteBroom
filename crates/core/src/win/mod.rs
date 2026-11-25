@@ -252,6 +252,12 @@ impl Opened {
         })
     }
 
+    /// Where the object behind this handle is now, read from the handle (it follows the file if
+    /// it was moved or renamed since it was opened).
+    pub fn current_path(&self) -> Result<WinPath, OpenError> {
+        final_path(&self.handle)
+    }
+
     /// A reader for the file's contents, on a duplicate of the checked handle, so the bytes
     /// read are those of the file that passed the check. Needs [`Access::Move`] or [`Access::Read`].
     ///

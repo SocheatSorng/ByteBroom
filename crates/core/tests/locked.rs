@@ -57,7 +57,7 @@ fn a_link_planted_under_the_target_name_is_never_followed() {
         &pol,
         &[wp(&tree.root.join("junk").join("a.tmp"))],
         &wp(&dest),
-        &tree.base.join("journal.log"),
+        &journal_at(&tree.base.join("journal.log")),
     );
 
     assert!(out.skipped.is_empty(), "{:?}", out.skipped);
@@ -120,7 +120,7 @@ fn undo_refuses_a_forged_journal_line_pointing_outside_the_roots() {
         &pol,
         &[wp(&tree.root.join("junk").join("a.tmp"))],
         &wp(&dest),
-        &journal,
+        &journal_at(&journal),
     );
     let honest = read_journal(&journal).unwrap().remove(0);
     // A forged line: same moved file, but "restore" it into the sentinel (outside the roots).
@@ -147,7 +147,7 @@ fn undo_refuses_an_original_folder_that_is_a_junction() {
         &pol,
         &[wp(&tree.root.join("junk").join("a.tmp"))],
         &wp(&dest),
-        &journal,
+        &journal_at(&journal),
     );
     let honest = read_journal(&journal).unwrap().remove(0);
     // The original's folder path now goes through the junction to the sentinel.

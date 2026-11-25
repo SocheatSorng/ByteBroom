@@ -61,10 +61,15 @@ and files ending in `.kdbx`, `.kdb`, `.psafe3`, `.1pif`, `.agilekeychain`, `.gpg
    now. Items it leaves out are listed with the reason (for example a duplicate whose kept copy is
    also chosen).
 4. **Confirm.** Green items need one confirm. Amber items need a second confirm that lists every
-   one of them. "Clean now" stays off until both are ticked.
+   one of them. "Clean now" stays off until both are ticked. When amber items are chosen, Windows'
+   own dialog "ByteBroom: clean your own files?" then opens over the window: only **Clean them**
+   goes ahead, and an answer given in under a second counts as a stray click, so nothing is
+   cleaned. Each answer is logged (counts only, no file names) in `ByteBroom\bytebroom.log` in your
+   local app data folder.
 5. **Clean.** Right before acting, each item is checked again: it must still be the same file,
    unchanged since the scan; a duplicate must still match its kept copy; and a temp item must not
-   have been used in the last 24 hours. Anything that changed stays, and the result says why.
+   have been used in the last 24 hours. The file's identity is checked once more on the very
+   handle that deletes, copies or recycles it. Anything that changed stays, and the result says why.
 
 Where the space comes back:
 

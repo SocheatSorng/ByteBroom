@@ -8,6 +8,7 @@
 
 use crate::paths::WinPath;
 use crate::policy::{Policy, Refusal};
+use crate::scan::FileIdentity;
 use crate::win::{self, Access, OpenError};
 use std::fmt;
 
@@ -105,11 +106,56 @@ impl Outcome {
     }
 }
 
+/// One item to act on and, for a file the scan saw, the identity it must still have.
+///
+/// The identity is compared on the very handle that then deletes, copies or recycles the file
+/// (security review note 3), so a file swapped in after the check right before acting is
+/// refused too. Folders carry none: their contents are checked one by one as always.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Target {
+    /// The path as the scan found it.
+    pub path: WinPath,
+    /// What the file must still be, if the scan recorded it.
+    pub expect: Option<FileIdentity>,
+}
+
+impl Target {
+    /// A target with no recorded identity (checked by the policy only).
+    pub fn any(path: &WinPath) -> Self {
+        Self {
+            path: path.clone(),
+            expect: None,
+        }
+    }
+}
+
+/// Why the object behind `opened` is not the file `expect` describes, or `None` if it is.
+/// Reads only from the open handle.
+pub fn not_as_expected(opened: &win::Opened, expect: &FileIdentity) -> Option<&'static str> {
+    if opened.resolved.is_reparse_point || opened.is_directory {
+        return Some("it is no longer a plain file");
+    }
+    if opened.file_id() != Some(expect.id) {
+        return Some("another file is in its place");
+    }
+    if opened.size != expect.len || opened.modified != expect.modified {
+        return Some("its contents changed");
+    }
+    None
+}
+
 /// Permanently delete each target (files, or folders with everything inside), within `policy`.
 pub fn delete_permanently(policy: &Policy, targets: &[WinPath]) -> Outcome {
+    let targets: Vec<Target> = targets.iter().map(Target::any).collect();
+    delete_targets(policy, &targets)
+}
+
+/// Like [`delete_permanently`], and each file with a recorded identity must still have it on
+/// the handle that deletes it.
+pub fn delete_targets(policy: &Policy, targets: &[Target]) -> Outcome {
     let mut out = Outcome::default();
     for target in targets {
-        delete_one(policy, target, 0, &mut out);
+        delete_one(policy, &target.path, target.expect.as_ref(), 0, &mut out);
     }
     out
 }
@@ -131,7 +177,13 @@ fn open_checked(policy: &Policy, path: &WinPath, out: &mut Outcome) -> Option<wi
 }
 
 /// Returns true when `path` is gone afterwards.
-fn delete_one(policy: &Policy, path: &WinPath, depth: usize, out: &mut Outcome) -> bool {
+fn delete_one(
+    policy: &Policy,
+    path: &WinPath,
+    expect: Option<&FileIdentity>,
+    depth: usize,
+    out: &mut Outcome,
+) -> bool {
     if depth > MAX_DEPTH {
         out.skip(path, SkipReason::TooDeep);
         return false;
@@ -139,6 +191,10 @@ fn delete_one(policy: &Policy, path: &WinPath, depth: usize, out: &mut Outcome) 
     let Some(opened) = open_checked(policy, path, out) else {
         return false;
     };
+    if let Some(what) = expect.and_then(|e| not_as_expected(&opened, e)) {
+        out.skip(path, SkipReason::ChangedSinceScan(what));
+        return false;
+    }
 
     if !opened.is_directory {
         let freed = if opened.link_count > 1 {
@@ -173,7 +229,7 @@ fn delete_one(policy: &Policy, path: &WinPath, depth: usize, out: &mut Outcome) 
     let mut all_gone = true;
     for name in names {
         match real.join(&name) {
-            Ok(child) => all_gone &= delete_one(policy, &child, depth + 1, out),
+            Ok(child) => all_gone &= delete_one(policy, &child, None, depth + 1, out),
             Err(e) => {
                 // A child whose name ByteBroom won't handle (e.g. ends with a dot): leave it.
                 all_gone = false;

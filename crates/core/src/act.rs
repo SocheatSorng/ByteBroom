@@ -13,15 +13,14 @@
 //! Anything refused is reported with the reason and left in place; the rest goes ahead.
 
 use crate::clean::prepare;
-use crate::engine::{Outcome, SkipReason, Skipped, delete_permanently};
+use crate::engine::{Outcome, SkipReason, Skipped, Target, delete_targets, not_as_expected};
 use crate::paths::WinPath;
 use crate::policy::{Policy, SystemLayout};
 use crate::preview::{Action, Preview};
-use crate::relocate::move_to;
+use crate::relocate::{Journal, move_targets};
 use crate::scan::{Finding, hash_whole_file, too_fresh_now};
 use crate::win::{Access, open_no_follow};
 use std::collections::{BTreeSet, HashMap};
-use std::path::Path;
 use std::time::SystemTime;
 
 /// What one action did.
@@ -41,10 +40,10 @@ pub struct Context<'a> {
     pub layout: &'a SystemLayout,
     /// Now, for the 24-hour rule.
     pub now: SystemTime,
-    /// The move journal (in the owner's local app data, never in the repo).
-    pub journal: &'a Path,
+    /// The move journal, held open (in the owner's local app data, never in the repo).
+    pub journal: &'a Journal,
     /// Sends targets to the Recycle Bin within a policy.
-    pub recycle: &'a dyn Fn(&Policy, &[WinPath]) -> Outcome,
+    pub recycle: &'a dyn Fn(&Policy, &[Target]) -> Outcome,
 }
 
 /// Why `f`'s item must not be acted on now, or `None` if it may. Only reads.
@@ -56,12 +55,9 @@ pub fn changed_since_scan(f: &Finding) -> Option<&'static str> {
         if opened.resolved.is_reparse_point || opened.is_directory {
             return Some("it is no longer a plain file");
         }
-        if let Some(seen) = f.identity {
-            if opened.file_id() != Some(seen.id) {
-                return Some("another file is in its place");
-            }
-            if opened.size != seen.len || opened.modified != seen.modified {
-                return Some("its contents changed");
+        if let Some(seen) = &f.identity {
+            if let Some(what) = not_as_expected(&opened, seen) {
+                return Some(what);
             }
         } else if opened.size != f.bytes {
             return Some("its size changed");
@@ -146,17 +142,25 @@ pub fn carry_out(findings: &[Finding], preview: &Preview, ctx: &Context) -> Vec<
         if let Some(policy) = &prepared.policy {
             let (ok, mut skipped) = check_targets(&prepared.targets, &by_path, ctx);
             outcome.skipped.append(&mut skipped);
+            // Each file's identity goes with it, to be compared again on the handle that acts.
+            let ok: Vec<Target> = ok
+                .iter()
+                .map(|path| Target {
+                    path: path.clone(),
+                    expect: by_path.get(path).and_then(|f| f.identity),
+                })
+                .collect();
             if !ok.is_empty() {
                 let done = match plan.action {
-                    Action::Delete => delete_permanently(policy, &ok),
+                    Action::Delete => delete_targets(policy, &ok),
                     Action::Recycle => (ctx.recycle)(policy, &ok),
                     Action::Move => match &preview.move_to {
-                        Some(dest) => move_to(policy, &ok, dest, ctx.journal),
+                        Some(dest) => move_targets(policy, &ok, dest, ctx.journal),
                         None => {
                             let mut o = Outcome::default();
                             for t in &ok {
                                 o.skipped.push(Skipped {
-                                    path: t.clone(),
+                                    path: t.path.clone(),
                                     reason: SkipReason::Unsupported("no destination".into()),
                                 });
                             }

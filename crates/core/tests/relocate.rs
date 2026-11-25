@@ -50,7 +50,12 @@ fn moves_a_file_and_the_journal_hash_matches_powershell() {
     let source = s.tree.root.join("junk").join("a.tmp");
     let before = snapshot(&s.tree.sentinel, "before", &s.tree.base);
 
-    let out = move_to(&s.pol, &[wp(&source)], &wp(&s.dest), &s.journal);
+    let out = move_to(
+        &s.pol,
+        &[wp(&source)],
+        &wp(&s.dest),
+        &journal_at(&s.journal),
+    );
 
     assert!(out.skipped.is_empty(), "{:?}", out.skipped);
     assert!(!source.exists());
@@ -74,7 +79,7 @@ fn never_overwrites_a_file_already_in_the_destination() {
         &s.pol,
         &[wp(&s.tree.root.join("junk").join("a.tmp"))],
         &wp(&s.dest),
-        &s.journal,
+        &journal_at(&s.journal),
     );
     assert!(out.skipped.is_empty(), "{:?}", out.skipped);
     assert_eq!(fs::read(s.dest.join("a.tmp")).unwrap(), b"already here");
@@ -88,7 +93,7 @@ fn moves_a_folder_with_its_structure() {
         &s.pol,
         &[wp(&s.tree.root.join("junk"))],
         &wp(&s.dest),
-        &s.journal,
+        &journal_at(&s.journal),
     );
     assert!(out.skipped.is_empty(), "{:?}", out.skipped);
     assert!(!s.tree.root.join("junk").exists());
@@ -115,7 +120,7 @@ fn a_locked_file_stays_and_the_rest_moves() {
         .share_mode(0)
         .open(mixed.join("held.tmp"))
         .unwrap();
-    let out = move_to(&s.pol, &[wp(&mixed)], &wp(&s.dest), &s.journal);
+    let out = move_to(&s.pol, &[wp(&mixed)], &wp(&s.dest), &journal_at(&s.journal));
     drop(held);
     assert!(!mixed.join("x.tmp").exists());
     assert!(mixed.join("held.tmp").exists());
@@ -138,7 +143,7 @@ fn links_and_outside_paths_are_refused_and_the_sentinel_is_untouched() {
             wp(&s.tree.root.join("link").join("keep.txt")),
         ],
         &wp(&s.dest),
-        &s.journal,
+        &journal_at(&s.journal),
     );
     assert!(out.removed.is_empty());
     let reasons: Vec<_> = out.skipped.iter().map(|s| s.reason.clone()).collect();
@@ -169,7 +174,12 @@ fn bad_destinations_are_refused_before_anything_happens() {
         wp(&s.tree.root.join("junk").join("deep")),
         wp(&s.tree.base.join("missing")),
     ] {
-        let out = move_to(&s.pol, std::slice::from_ref(&target), &dest, &s.journal);
+        let out = move_to(
+            &s.pol,
+            std::slice::from_ref(&target),
+            &dest,
+            &journal_at(&s.journal),
+        );
         assert!(out.removed.is_empty(), "moved into {dest}");
         assert!(
             matches!(out.skipped[0].reason, SkipReason::Unsupported(_)),
@@ -185,7 +195,12 @@ fn bad_destinations_are_refused_before_anything_happens() {
 fn undo_puts_the_file_back_and_removes_the_moved_copy() {
     let s = setup();
     let source = s.tree.root.join("junk").join("b.tmp");
-    move_to(&s.pol, &[wp(&source)], &wp(&s.dest), &s.journal);
+    move_to(
+        &s.pol,
+        &[wp(&source)],
+        &wp(&s.dest),
+        &journal_at(&s.journal),
+    );
     let entry = read_journal(&s.journal).unwrap().remove(0);
 
     undo_move(&s.pol, &entry).unwrap();
@@ -199,7 +214,12 @@ fn undo_puts_the_file_back_and_removes_the_moved_copy() {
 fn undo_refuses_when_the_moved_file_changed_or_the_place_is_taken() {
     let s = setup();
     let source = s.tree.root.join("junk").join("b.tmp");
-    move_to(&s.pol, &[wp(&source)], &wp(&s.dest), &s.journal);
+    move_to(
+        &s.pol,
+        &[wp(&source)],
+        &wp(&s.dest),
+        &journal_at(&s.journal),
+    );
     let entry = read_journal(&s.journal).unwrap().remove(0);
 
     write_file(&source, b"new file in the old place");
@@ -233,7 +253,7 @@ fn moving_to_another_drive_frees_the_space() {
         &s.pol,
         &[wp(&s.tree.root.join("junk").join("a.tmp"))],
         &dest,
-        &s.journal,
+        &journal_at(&s.journal),
     );
     assert!(out.skipped.is_empty(), "{:?}", out.skipped);
     assert_eq!(out.bytes_freed, 1000);
@@ -254,7 +274,12 @@ fn a_file_open_for_writing_is_not_moved() {
         .share_mode(7) // read | write | delete: only the write access matters here
         .open(&source)
         .unwrap();
-    let out = move_to(&s.pol, &[wp(&source)], &wp(&s.dest), &s.journal);
+    let out = move_to(
+        &s.pol,
+        &[wp(&source)],
+        &wp(&s.dest),
+        &journal_at(&s.journal),
+    );
     drop(writer);
     assert_eq!(out.skipped[0].reason, SkipReason::InUse);
     assert!(source.exists());

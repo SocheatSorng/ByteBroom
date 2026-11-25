@@ -330,13 +330,25 @@ fn clean_asks_in_rust_before_acting_on_amber_items() {
         .and_then(|s| s.split("\n}\n").next())
         .expect("the clean command");
     let ask = body.find("amber_question(&ready)").expect("clean asks");
-    let shown = body.find("blocking_show()").expect("in a native dialog");
+    let shown = body.find("confirm::ask(").expect("in a native dialog");
+    let stop = body
+        .find("if let Some(why) = confirm::refusal(verdict)")
+        .expect("anything but a clean verdict stops the clean");
     let act = body.find("carry_out(").expect("clean acts");
     assert!(
-        ask < shown && shown < act,
+        ask < shown && shown < stop && stop < act,
         "the question comes before acting"
     );
-    assert!(body.contains("if !yes"), "a no stops the clean");
+    // Phase 3's open bug: the dialog opens over the main window, its exact answer is read and
+    // logged, and the bool shortcut (which maps several answers to yes) is not used.
+    let confirm = read("src/confirm.rs");
+    assert!(
+        confirm.contains(".parent(&window)"),
+        "the dialog has a parent"
+    );
+    assert!(confirm.contains(".blocking_show_with_result()"));
+    assert!(!confirm.contains(".blocking_show()"));
+    assert!(confirm.contains("log("), "every answer is logged");
 }
 
 /// Owner's real test: the browser's own menu (Back, Refresh, Print) and reload keys wiped the
