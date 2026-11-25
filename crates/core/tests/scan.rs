@@ -268,9 +268,13 @@ impl Drop for Profile {
     }
 }
 
+/// Scan as if two days from now. Every fake file was *created* just now, and a temp item counts
+/// as fresh by its creation and change dates too (security review S4), so a real-time scan would
+/// rightly offer no temp items at all. `fresh_items_wait_even_with_old_dates` scans at the real
+/// time.
 fn run(p: &Profile) -> Vec<Finding> {
     let opts = ScanOptions {
-        now: SystemTime::now(),
+        now: SystemTime::now() + 2 * DAY,
         cancel: None,
     };
     let report = scan(&p.locations(), &p.layout(), &opts);
@@ -291,6 +295,9 @@ fn every_category_is_found_and_no_decoy_is() {
     let expected: BTreeSet<(String, String)> = [
         ("user-temp", format!("{L}Temp\\old.tmp")),
         ("user-temp", format!("{L}Temp\\olddir")),
+        // Two days on, these are old enough too (see `run`).
+        ("user-temp", format!("{L}Temp\\fresh.tmp")),
+        ("user-temp", format!("{L}Temp\\mixed")),
         ("crash-dumps", format!("{L}CrashDumps\\app.dmp")),
         (
             "error-reports",
@@ -433,6 +440,83 @@ fn fresh_temp_items_wait_and_the_cut_off_is_24_hours() {
             .iter()
             .any(|f| p.rel(f) == "Downloads\\new-setup.exe")
     );
+}
+
+/// Security review S4: an installer extracting into Temp right now leaves files with the archive's
+/// old dates. Their creation (and change) dates are new, so the folder is fresh and not offered.
+#[test]
+fn fresh_items_wait_even_with_old_dates() {
+    let p = Profile::new();
+    let setup = p
+        .home
+        .join("AppData")
+        .join("Local")
+        .join("Temp")
+        .join("setup123");
+    // Modified in 2019, as an extracted file keeps it; created just now.
+    let in_2019 = SystemTime::UNIX_EPOCH + Duration::from_secs(1_560_000_000);
+    write_file(&setup.join("a.dll"), &[1; 100]);
+    File::options()
+        .write(true)
+        .open(setup.join("a.dll"))
+        .unwrap()
+        .set_modified(in_2019)
+        .unwrap();
+
+    let opts = ScanOptions {
+        now: SystemTime::now(),
+        cancel: None,
+    };
+    let report = scan(&p.locations(), &p.layout(), &opts);
+    let temp: Vec<String> = report
+        .findings
+        .iter()
+        .filter(|f| f.rule.id == "user-temp")
+        .map(|f| p.rel(f))
+        .collect();
+    // Everything in this fake Temp was created just now: nothing is offered yet.
+    assert!(temp.is_empty(), "{temp:?}");
+
+    // Two days later, the same folder is offered.
+    let later = ScanOptions {
+        now: SystemTime::now() + 2 * DAY,
+        cancel: None,
+    };
+    let report = scan(&p.locations(), &p.layout(), &later);
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|f| p.rel(f) == format!("{L}Temp\\setup123"))
+    );
+}
+
+/// Security review S4: a temp item with a part that could not be read is never offered, since its
+/// newest date is unknown. Other rules still offer such items (they have no freshness rule).
+#[test]
+fn a_temp_item_with_an_unreadable_part_is_not_offered() {
+    let p = Profile::new();
+    let temp = p.home.join("AppData").join("Local").join("Temp");
+    old(&temp.join("partly").join("seen.tmp"), 10);
+    let locked = temp.join("partly").join("locked");
+    old(&locked.join("unseen.tmp"), 10);
+    let user = std::env::var("USERNAME").unwrap();
+    let denied = std::process::Command::new("icacls")
+        .arg(&locked)
+        .args(["/deny", &format!("{user}:(RD)")])
+        .output()
+        .is_ok_and(|o| o.status.success());
+    let found: Vec<String> = run(&p).iter().map(|f| p.rel(f)).collect();
+    let _ = std::process::Command::new("icacls")
+        .arg(&locked)
+        .args(["/remove:d", &user])
+        .output();
+    assert!(denied, "icacls could not deny the folder");
+    assert!(
+        !found.contains(&format!("{L}Temp\\partly")),
+        "offered although part of it was not seen"
+    );
+    assert!(found.contains(&format!("{L}Temp\\olddir")));
 }
 
 #[test]

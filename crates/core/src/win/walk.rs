@@ -34,6 +34,8 @@ struct RawEntry {
     reparse_tag: u32,
     len: u64,
     modified: i64,
+    /// The latest of its creation, last-write and change times.
+    activity: i64,
     /// `None` on file systems without file IDs.
     id: Option<[u8; 16]>,
 }
@@ -97,7 +99,7 @@ fn parse(buf: &[u64], extended: bool, out: &mut Vec<RawEntry>) {
         }
         // SAFETY: `offset + header` is within `buf`, and Windows wrote an entry here.
         let entry = unsafe { base.add(offset) };
-        let (next, name_len, attributes, reparse_tag, len, modified, id) = if extended {
+        let (next, name_len, attributes, reparse_tag, len, modified, activity, id) = if extended {
             // SAFETY: the header bytes are in bounds (checked above); read_unaligned copies them.
             let e = unsafe { entry.cast::<FILE_ID_EXTD_DIR_INFO>().read_unaligned() };
             (
@@ -107,6 +109,7 @@ fn parse(buf: &[u64], extended: bool, out: &mut Vec<RawEntry>) {
                 e.ReparsePointTag,
                 e.EndOfFile,
                 e.LastWriteTime,
+                e.CreationTime.max(e.LastWriteTime).max(e.ChangeTime),
                 Some(e.FileId.Identifier),
             )
         } else {
@@ -120,6 +123,7 @@ fn parse(buf: &[u64], extended: bool, out: &mut Vec<RawEntry>) {
                 e.EaSize,
                 e.EndOfFile,
                 e.LastWriteTime,
+                e.CreationTime.max(e.LastWriteTime).max(e.ChangeTime),
                 None,
             )
         };
@@ -143,6 +147,7 @@ fn parse(buf: &[u64], extended: bool, out: &mut Vec<RawEntry>) {
             reparse_tag,
             len: u64::try_from(len).unwrap_or(0),
             modified,
+            activity,
             id: id.filter(|bytes| bytes.iter().any(|b| *b != 0)),
         });
         if next == 0 {
@@ -190,21 +195,25 @@ pub fn walk(
                         || !d.resolved.final_path.eq_ignore_case(&path) =>
                 {
                     summary.changed += 1;
+                    visit(&Item::Incomplete { path: &path, depth });
                     continue;
                 }
                 Ok(d) => d,
                 Err(OpenError::NotFound) => {
                     summary.changed += 1;
+                    visit(&Item::Incomplete { path: &path, depth });
                     continue;
                 }
                 Err(_) => {
                     summary.unreadable += 1;
+                    visit(&Item::Incomplete { path: &path, depth });
                     continue;
                 }
             },
         };
         let Ok(entries) = list(&dir) else {
             summary.unreadable += 1;
+            visit(&Item::Incomplete { path: &path, depth });
             continue;
         };
         let volume = dir.volume_serial;
@@ -248,10 +257,15 @@ pub fn walk(
                     path: &child,
                     depth: child_depth,
                     modified: from_file_time(entry.modified),
+                    activity: from_file_time(entry.activity),
                 });
                 if step == Step::Enter {
                     if child_depth >= opts.max_depth {
                         summary.depth_limited += 1;
+                        visit(&Item::Incomplete {
+                            path: &child,
+                            depth: child_depth,
+                        });
                     } else {
                         stack.push((child, child_depth, None));
                     }
@@ -268,6 +282,7 @@ pub fn walk(
                     path: child,
                     len: entry.len,
                     modified: from_file_time(entry.modified),
+                    activity: from_file_time(entry.activity),
                     cloud: cloud_file || entry.attributes & CLOUD_ATTRIBUTES != 0,
                     repeat,
                     depth: child_depth,

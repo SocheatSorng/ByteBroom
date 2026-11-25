@@ -101,9 +101,11 @@ impl Home {
         p.to_string()[real(&self.home).to_string().len() + 1..].to_string()
     }
 
+    /// Scanned as if two days from now: the fake files were created just now, and creation dates
+    /// count toward the 24-hour temp rule.
     fn findings(&self) -> Vec<Finding> {
         let opts = ScanOptions {
-            now: SystemTime::now(),
+            now: SystemTime::now() + 2 * DAY,
             cancel: None,
         };
         scan(&self.locations(), &self.layout(), &opts).findings

@@ -49,6 +49,9 @@ pub struct FileEntry {
     pub len: u64,
     /// When its contents last changed.
     pub modified: SystemTime,
+    /// The latest of its creation, last-write and change times: when anything last happened to
+    /// it. A file extracted today from an old archive has an old `modified` but a new `activity`.
+    pub activity: SystemTime,
     /// A cloud placeholder (e.g. OneDrive): its length may not be on this disk.
     pub cloud: bool,
     /// Another name of a file already reported in this walk (a hard link). Its bytes are not
@@ -69,9 +72,19 @@ pub enum Item<'a> {
         depth: usize,
         /// When it last changed.
         modified: SystemTime,
+        /// The latest of its creation, last-write and change times.
+        activity: SystemTime,
     },
     /// A file.
     File(&'a FileEntry),
+    /// A folder whose contents were not all seen: it could not be listed, changed during the
+    /// walk, or is at the depth limit. Sizes and dates below it are incomplete.
+    Incomplete {
+        /// The folder.
+        path: &'a WinPath,
+        /// How deep it is.
+        depth: usize,
+    },
 }
 
 /// The visitor's answer for a folder (ignored for files).

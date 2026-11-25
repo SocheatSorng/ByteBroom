@@ -88,6 +88,12 @@ struct Tally {
     newest_file: Option<SystemTime>,
     own_date: SystemTime,
     cloud: bool,
+    /// The latest creation, write or change time of anything in it, folders included: what the
+    /// "fresh" rule (decision 4) looks at.
+    activity: Option<SystemTime>,
+    /// Part of it was not seen (unreadable, changed during the scan, too deep), so its activity
+    /// is unknown.
+    incomplete: bool,
 }
 
 impl Tally {
@@ -99,7 +105,22 @@ impl Tally {
             newest_file: None,
             own_date,
             cloud: false,
+            activity: None,
+            incomplete: false,
         }
+    }
+
+    fn touch(&mut self, when: SystemTime) {
+        self.activity = Some(self.activity.map_or(when, |a| a.max(when)));
+    }
+
+    /// Changed within `hours` of `now`, or not fully seen: either way, not offered by a rule
+    /// that keeps fresh items.
+    fn too_fresh(&self, now: SystemTime, hours: u64) -> bool {
+        let cut = now
+            .checked_sub(Duration::from_secs(hours * 3600))
+            .unwrap_or(UNIX_EPOCH);
+        self.incomplete || self.newest() > cut || self.activity.is_some_and(|a| a > cut)
     }
 
     fn add_file(&mut self, len: u64, modified: SystemTime, repeat: bool, cloud: bool) {
@@ -236,23 +257,33 @@ impl Scanner<'_> {
             match item {
                 Item::Folder {
                     path,
-                    depth,
                     modified,
+                    activity,
+                    ..
                 } => {
-                    if *depth == 1
-                        && let Some(name) = path.parts().get(depth_of_children)
-                    {
+                    // Every folder, at any depth, counts toward its top item's activity.
+                    if let Some(name) = path.parts().get(depth_of_children) {
                         items
                             .entry(name.clone())
-                            .or_insert_with(|| Tally::new(true, *modified));
+                            .or_insert_with(|| Tally::new(true, *modified))
+                            .touch(*activity);
                     }
                 }
                 Item::File(f) => {
                     if let Some(name) = f.path.parts().get(depth_of_children) {
+                        let t = items
+                            .entry(name.clone())
+                            .or_insert_with(|| Tally::new(f.depth > 1, f.modified));
+                        t.add_file(f.len, f.modified, f.repeat, f.cloud);
+                        t.touch(f.activity);
+                    }
+                }
+                Item::Incomplete { path, .. } => {
+                    if let Some(name) = path.parts().get(depth_of_children) {
                         items
                             .entry(name.clone())
-                            .or_insert_with(|| Tally::new(f.depth > 1, f.modified))
-                            .add_file(f.len, f.modified, f.repeat, f.cloud);
+                            .or_insert_with(|| Tally::new(true, UNIX_EPOCH))
+                            .incomplete = true;
                     }
                 }
             }
@@ -274,14 +305,8 @@ impl Scanner<'_> {
     }
 
     fn push(&mut self, rule: &'static Rule, root: &WinPath, path: WinPath, t: &Tally) {
-        if rule.fresh_hours > 0 {
-            let cut = self
-                .now
-                .checked_sub(Duration::from_secs(rule.fresh_hours * 3600))
-                .unwrap_or(UNIX_EPOCH);
-            if t.newest() > cut {
-                return;
-            }
+        if rule.fresh_hours > 0 && t.too_fresh(self.now, rule.fresh_hours) {
+            return;
         }
         self.report.findings.push(Finding {
             rule,

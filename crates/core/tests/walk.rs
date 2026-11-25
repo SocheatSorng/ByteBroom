@@ -130,11 +130,26 @@ fn collect(
                 assert!(path.is_strictly_inside(root));
                 folders.push(path.to_string()[prefix..].to_string());
             }
+            Item::Incomplete { .. } => {}
         }
         Step::Enter
     })
     .unwrap();
     (files, folders, summary)
+}
+
+/// The folders the walk reports as not fully seen, relative to the root.
+fn incomplete_folders(root: &WinPath, opts: &WalkOptions) -> Vec<String> {
+    let prefix = root.to_string().len() + 1;
+    let mut out = Vec::new();
+    walk(root, &system_layout(), opts, |item| {
+        if let Item::Incomplete { path, .. } = item {
+            out.push(path.to_string()[prefix..].to_string());
+        }
+        Step::Enter
+    })
+    .unwrap();
+    out
 }
 
 #[test]
@@ -235,6 +250,12 @@ fn an_unreadable_folder_is_counted_and_the_walk_goes_on() {
     assert!(!files.contains_key("locked\\x.bin"));
     assert_eq!(s.unreadable, 1);
     assert_eq!(s.files, 5);
+    // The visitor is told which folder was not seen, so its item's sizes and dates are known
+    // to be incomplete.
+    assert_eq!(
+        incomplete_folders(&tree.root(), &WalkOptions::default()),
+        vec!["locked".to_string()]
+    );
 }
 
 #[test]
@@ -250,6 +271,9 @@ fn stops_at_the_depth_limit() {
     assert!(!files.keys().any(|k| k.contains("c.bin")));
     assert!(files.contains_key("sub\\b.bin"));
     assert_eq!(s.depth_limited, 1);
+    let mut gaps = incomplete_folders(&tree.root(), &opts);
+    gaps.retain(|g| g != "locked"); // denied to this user when icacls allowed it
+    assert_eq!(gaps, vec!["sub\\deep".to_string()]);
 }
 
 #[test]
@@ -266,7 +290,7 @@ fn the_visitor_can_skip_a_folder() {
                     return Step::Skip;
                 }
                 Item::File(f) => seen.push(f.path.parts().last().cloned().unwrap()),
-                Item::Folder { .. } => {}
+                Item::Folder { .. } | Item::Incomplete { .. } => {}
             }
             Step::Enter
         },
