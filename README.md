@@ -4,10 +4,30 @@ A Windows disk-space cleaner. With your explicit permission (a Windows administr
 scans the drive, shows you what it can clean and how much space each item frees, and removes only what
 you confirm.
 
-> **Status: phase 4 (elevation and the red tier) built, awaiting the owner's check; version 0.3.0.**
-> The safety core and delete engine (phase 1), the scanner (phase 2) and the window (phase 3) are
-> done. The window now also frees three of Windows' own areas through Windows' own tools. The
-> phases are in `docs/spec.md`.
+> **Status: phase 6 (release) built, awaiting the owner's checks; version 1.0.0.**
+> The safety core, scanner, window, red tier and history (phases 1 to 5) are done. Phase 6 adds the
+> installer and signed updates. The phases are in `docs/spec.md`.
+
+## Install
+
+1. Download `ByteBroom_<version>_x64-setup.exe` from this repository's **Releases** page.
+2. Run it. ByteBroom has no paid code-signing certificate yet, so Windows SmartScreen may say
+   "Windows protected your PC": click **More info**, check the app name, then **Run anyway**.
+3. Windows asks for administrator rights (UAC): the installer puts ByteBroom for all users in
+   `Program Files\ByteBroom`, a folder only administrators can change. Keep that folder: the
+   red-tier buttons only work from there.
+
+**Updates.** When ByteBroom starts, it asks this repository's Releases once whether a newer version
+is out. If so, it shows "ByteBroom X is available. Install it now?". Nothing is downloaded until you
+press **Install update**. ByteBroom then downloads it and installs it only if its signature matches
+ByteBroom's key (built into the app). Windows asks for administrator rights again, and ByteBroom
+closes while it installs. An update never starts while a clean or put-back is running.
+
+**Uninstall.** Use Windows' **Settings → Apps → Installed apps → ByteBroom → Uninstall**. It removes
+`Program Files\ByteBroom`. Your history stays in `%LOCALAPPDATA%\ByteBroom` (moves, recycled items
+and the log), so a moved file can still be put back after a reinstall. To forget it too, delete that
+folder yourself. The uninstaller's "Delete the application data" box removes only the window's
+browser cache, not your history.
 
 ## Safety promises
 
@@ -147,13 +167,22 @@ again. How to undo each action and how to roll Windows back, even when it won't 
 
 To run the window, install the Tauri CLI once with `cargo install --locked tauri-cli`, then run
 `cargo tauri dev` in your project folder. To build it, run `./build.ps1`: it makes
-`target\release\bytebroom.exe` (the installer comes in phase 6).
+`target\release\bytebroom.exe`, the elevated helper, and an unsigned installer holding both in
+`target\release\bundle\nsis`. After installing, `./tools/verify-install.ps1` checks, read-only,
+that both programs are in `Program Files\ByteBroom` and only administrators can change them.
 
-`./build.ps1` also builds the elevated helper, `target\release\bytebroom-admin.exe` (phase 4).
+A signed release is made on your PC with `./release.ps1`. It runs every check, builds the
+installer, signs it with the key in `%LOCALAPPDATA%\ByteBroom-signing` (you type its password), writes
+`latest.json`, and checks all three independently with `node tools/verify-release.mjs`. It uploads
+nothing: you attach the files it lists to a GitHub release named `v<version>` in the browser. Keep
+an offline copy of the key and its password: without them, installed copies can never be updated.
+
+The elevated helper is `target\release\bytebroom-admin.exe` (phase 4).
 The window never runs as administrator; for a red-tier action it starts this helper
 through Windows' UAC prompt, which only you click. The helper has no window and does one fixed
 action per run. It runs only from an admin-owned folder, `Program Files\ByteBroom`, and refuses
-anywhere else, so ordinary programs can't swap it. To put it there, run
+anywhere else, so ordinary programs can't swap it. The installer puts it there. For a dev build
+without the installer, run
 `./tools/install-helper.ps1` in an administrator PowerShell in your project folder; to remove
 it, run `./tools/uninstall-helper.ps1` the same way. The script copies the helper from your build
 folder, which your own account can change, so run `./build.ps1` and the install one after the
@@ -175,9 +204,12 @@ is only printed in your terminal and never saved.
   `uv tool install pre-commit`), then hooks run on each commit. Hooks: gitleaks, private-key detection,
   large-file check, JSON/YAML checks, zizmor for GitHub Actions workflows.
 - GitHub Actions: `security.yml` (gitleaks over the full history, zizmor), Dependabot weekly.
-- The window's boundary is pinned by `src-tauri/tests/boundary.rs`: the seven commands, the one
-  capability file, the content security policy, the approved dependencies, and a page that loads
-  nothing remote and runs no inline code.
+- The window's boundary is pinned by `src-tauri/tests/boundary.rs`: the command list, the one
+  capability file, the content security policy, the approved dependencies, the updater's endpoint
+  and key, no private key in the repo, and a page that loads nothing remote and runs no inline code.
+- The installer, updater and release are pinned by `src-tauri/tests/installer.rs`,
+  `src-tauri/tests/updater.rs` (tampered, foreign-key and wrong-version updates are refused) and
+  `src-tauri/tests/release.rs`.
 
 ## License
 

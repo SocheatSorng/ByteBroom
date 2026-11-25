@@ -85,3 +85,33 @@ before you start. (On the owner's PC, BitLocker is off for C:, checked read-only
 - Windows can delete a confirmed restore point later, for example when C: fills up.
 - Microsoft's recovery pages apply to Windows 11 and Windows 10, with no build named; Windows 10
   support ended on 2025-10-14.
+
+## Roll back an update (phase 6)
+
+An update replaces `Program Files\ByteBroom` with the newer version. It never touches your history
+in `%LOCALAPPDATA%\ByteBroom`. To go back to an earlier version:
+
+1. Download that version's `ByteBroom_<version>_x64-setup.exe` from this repository's Releases page.
+2. Uninstall ByteBroom (**Settings → Apps → Installed apps → ByteBroom → Uninstall**). Leave
+   "Delete the application data" unticked; it never removes your history anyway.
+3. Run the older installer and accept Windows' administrator prompt.
+4. Optional: run `./tools/verify-install.ps1` in your project folder to check the install, read-only.
+
+At the next start the older version offers the newer update again. Press **Not now** until a fixed
+version is out.
+
+## The signing key
+
+The private key is `bytebroom.key` in `%LOCALAPPDATA%\ByteBroom-signing`, and its password is the
+one you typed when you made it. Neither is ever in this repository or on GitHub.
+
+- **Lost on this PC:** copy `bytebroom.key` and `bytebroom.key.pub` back from your offline backup
+  into that folder. `./release.ps1` refuses any key whose public half isn't the one in
+  `src-tauri/tauri.conf.json`.
+- **Lost for good (no backup):** installed copies can never update again. Make a new key and put
+  its public half in `tauri.conf.json`. Then tell users in the release notes to download and
+  install the new version by hand once.
+- **Leaked (someone else may have the file and the password):** make a new key, release a version
+  that carries the new public key at once, and say in its release notes why. Until users have
+  that version, an update signed with the old key would still be accepted, so watch the
+  repository's Releases for anything you didn't publish.

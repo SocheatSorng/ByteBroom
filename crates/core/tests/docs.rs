@@ -381,3 +381,42 @@ fn the_helper_the_readme_names_is_built_and_installed_as_it_says() {
     assert!(win.contains("HELPER_FOLDER: &str = \"ByteBroom\""));
     assert!(win.contains("HELPER_EXE: &str = \"bytebroom-admin.exe\""));
 }
+
+/// Phase 6: the install, update, uninstall and release steps the README and the recovery recipe
+/// give are the ones the code, scripts and installer really use.
+#[test]
+fn the_install_update_and_release_steps_match_the_code() {
+    let readme = read("README.md");
+    for text in [
+        "**More info**",
+        "**Run anyway**",
+        r"`Program Files\ByteBroom`",
+        r"`%LOCALAPPDATA%\ByteBroom`",
+        "\"Delete the application data\"",
+        "**Install update**",
+        "`./tools/verify-install.ps1`",
+        "`./release.ps1`",
+        r"`%LOCALAPPDATA%\ByteBroom-signing`",
+        "`node tools/verify-release.mjs`",
+    ] {
+        assert!(readme.contains(text), "README lacks {text}");
+    }
+    for file in [
+        "release.ps1",
+        "tools/verify-install.ps1",
+        "tools/verify-release.mjs",
+        "src-tauri/tauri.installer.json",
+        "src-tauri/tauri.release.json",
+    ] {
+        assert!(repo_root().join(file).exists(), "{file} is missing");
+    }
+    // The page's own words.
+    let page = read("ui/index.html");
+    assert!(page.contains(">Install update<") && page.contains(">Not now<"));
+    assert!(read("ui/app.js").contains("is available. Install it now?"));
+    // The key folder the README names is the one release.ps1 uses.
+    assert!(read("release.ps1").contains("Join-Path $env:LOCALAPPDATA 'ByteBroom-signing'"));
+    let recipe = read("docs/recovery.md");
+    assert!(recipe.contains("## Roll back an update"));
+    assert!(recipe.contains("`bytebroom.key`") && recipe.contains("offline backup"));
+}
