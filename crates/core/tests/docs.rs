@@ -191,7 +191,8 @@ fn the_window_commands_and_promises_match_the_code() {
     ] {
         assert!(claude.contains(command), "CLAUDE.md lacks {command}");
     }
-    assert!(build.contains("cargo tauri build --no-bundle"));
+    // Phase 6: build.ps1 makes the per-machine installer (src-tauri/tests/installer.rs).
+    assert!(build.contains("cargo tauri build --config tauri.installer.json"));
     assert!(build.contains("cargo install --locked tauri-cli"));
     assert!(readme.contains("`target\\release\\bytebroom.exe`"));
     assert!(read("src-tauri/Cargo.toml").contains("name = \"bytebroom\""));
