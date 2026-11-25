@@ -171,6 +171,7 @@ mod tests {
             cloud: false,
             pre_ticked: rule.pre_ticked(),
             duplicate_of: None,
+            identity: None,
         }
     }
 

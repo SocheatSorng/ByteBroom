@@ -59,6 +59,18 @@ pub struct FileEntry {
     pub repeat: bool,
     /// How deep it is (the root's children are depth 1).
     pub depth: usize,
+    /// Which file this is, as Windows numbers it (`None` on file systems without file IDs).
+    pub id: Option<FileId>,
+}
+
+/// Windows' number for a file: the same file keeps it when renamed, and another file put in its
+/// place gets a different one. Lets a clean check that a path still names the file the scan saw.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FileId {
+    /// The volume's serial number.
+    pub volume: u32,
+    /// The file's ID on that volume (128-bit, as NTFS and ReFS report it).
+    pub id: [u8; 16],
 }
 
 /// One thing the walk reports to its visitor.

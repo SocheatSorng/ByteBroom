@@ -12,7 +12,8 @@ use crate::paths::WinPath;
 use crate::policy::{SystemLayout, denied_reason};
 use crate::rules::is_never_listed;
 use crate::walk::{
-    CLOUD_ATTRIBUTES, FileEntry, Item, Step, WalkOptions, WalkSummary, from_file_time, is_cloud_tag,
+    CLOUD_ATTRIBUTES, FileEntry, FileId, Item, Step, WalkOptions, WalkSummary, from_file_time,
+    is_cloud_tag,
 };
 use std::collections::HashSet;
 use std::io;
@@ -286,6 +287,7 @@ pub fn walk(
                     cloud: cloud_file || entry.attributes & CLOUD_ATTRIBUTES != 0,
                     repeat,
                     depth: child_depth,
+                    id: entry.id.map(|id| FileId { volume, id }),
                 };
                 visit(&Item::File(&file));
             }

@@ -219,6 +219,7 @@ fn crafted(root: &Path, item: &Path) -> Finding {
         cloud: false,
         pre_ticked: true,
         duplicate_of: None,
+        identity: None,
     }
 }
 

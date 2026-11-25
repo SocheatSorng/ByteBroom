@@ -538,12 +538,38 @@ fn the_scan_times_each_step_and_walks_the_search_areas_once() {
         1,
         "{steps:?}"
     );
-    let rules: Vec<&str> = bytebroom_core::rules::RULES
+    // Rule order, except that duplicates (the slow, hashing step) run last.
+    let (dups, mut rules): (Vec<&str>, Vec<&str>) = bytebroom_core::rules::RULES
         .iter()
         .filter(|r| r.tier != Tier::Red)
         .map(|r| r.label)
-        .collect();
+        .partition(|l| *l == "Duplicates");
+    rules.extend(dups);
     assert_eq!(steps[1..].to_vec(), rules);
+}
+
+/// Security review F1: every single-file finding records which file the scan saw (Windows' file
+/// number, length and date), the same numbering a handle reports; folders record none.
+#[test]
+fn file_findings_record_which_file_they_are() {
+    let p = Profile::new();
+    let findings = run(&p);
+    let mut files = 0;
+    for f in &findings {
+        if f.is_folder {
+            assert!(f.identity.is_none(), "{}", f.path);
+            continue;
+        }
+        let id = f
+            .identity
+            .unwrap_or_else(|| panic!("{} has no identity", f.path));
+        files += 1;
+        assert_eq!(id.len, f.bytes, "{}", f.path);
+        assert_eq!(id.modified, f.newest, "{}", f.path);
+        let opened = open_no_follow(&f.path, Access::Inspect).unwrap();
+        assert_eq!(opened.file_id(), Some(id.id), "{}", f.path);
+    }
+    assert!(files >= 5, "only {files} file findings");
 }
 
 #[test]

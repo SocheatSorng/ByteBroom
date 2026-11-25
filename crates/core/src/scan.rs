@@ -23,7 +23,7 @@ use crate::rules::{
     LARGE_FILE_BYTES, Look, OLD_INSTALLER_DAYS, Place, RULES, Rule, Tier, base_folder,
     name_matches,
 };
-use crate::walk::{Item, Step, WalkOptions, WalkSummary};
+use crate::walk::{FileEntry, FileId, Item, Step, WalkOptions, WalkSummary};
 use crate::win::hash::Sha256;
 use crate::win::walk::walk;
 use crate::win::{Access, open_no_follow};
@@ -66,12 +66,28 @@ pub struct Finding {
     pub pre_ticked: bool,
     /// For a duplicate: the copy that is kept.
     pub duplicate_of: Option<WinPath>,
+    /// For a single file: which file the scan saw (security review F1). A clean checks it is
+    /// still the same file, unchanged, right before acting. `None` for folders, and on file
+    /// systems without file IDs.
+    pub identity: Option<FileIdentity>,
+}
+
+/// A file as the scan saw it: its Windows file number, length and last change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileIdentity {
+    /// Windows' number for the file.
+    pub id: FileId,
+    /// Its length in bytes.
+    pub len: u64,
+    /// When its contents last changed.
+    pub modified: SystemTime,
 }
 
 /// The result of a scan.
 #[derive(Debug, Clone, Default)]
 pub struct ScanReport {
-    /// What could be cleaned, in rule order.
+    /// What could be cleaned, in rule order, except that duplicates come last (see
+    /// [`scan_in_steps`]).
     pub findings: Vec<Finding>,
     /// Totals of every walk (counts only, never names).
     pub walked: WalkSummary,
@@ -108,11 +124,14 @@ struct Tally {
     /// Part of it was not seen (unreadable, changed during the scan, too deep), so its activity
     /// is unknown.
     incomplete: bool,
+    /// For a single file, which file it is.
+    identity: Option<FileIdentity>,
 }
 
 impl Tally {
     fn new(is_folder: bool, own_date: SystemTime) -> Self {
         Self {
+            identity: None,
             is_folder,
             bytes: 0,
             files: 0,
@@ -144,6 +163,18 @@ impl Tally {
         }
         self.cloud |= cloud;
         self.newest_file = Some(self.newest_file.map_or(modified, |n| n.max(modified)));
+    }
+
+    /// A tally for one file the walk found, with its identity.
+    fn of_file(f: &FileEntry) -> Self {
+        let mut t = Self::new(false, f.modified);
+        t.add_file(f.len, f.modified, f.repeat, f.cloud);
+        t.identity = f.id.map(|id| FileIdentity {
+            id,
+            len: f.len,
+            modified: f.modified,
+        });
+        t
     }
 
     fn newest(&self) -> SystemTime {
@@ -193,6 +224,21 @@ struct SearchFile {
     cloud: bool,
     /// It may be hashed and offered as a duplicate.
     duplicate_candidate: bool,
+    /// Windows' number for it.
+    id: Option<FileId>,
+}
+
+impl SearchFile {
+    fn tally(&self) -> Tally {
+        let mut t = Tally::new(false, self.modified);
+        t.add_file(self.len, self.modified, false, self.cloud);
+        t.identity = self.id.map(|id| FileIdentity {
+            id,
+            len: self.len,
+            modified: self.modified,
+        });
+        t
+    }
 }
 
 impl Scanner<'_> {
@@ -294,11 +340,17 @@ impl Scanner<'_> {
                 }
                 Item::File(f) => {
                     if let Some(name) = f.path.parts().get(depth_of_children) {
-                        let t = items
-                            .entry(name.clone())
-                            .or_insert_with(|| Tally::new(f.depth > 1, f.modified));
-                        t.add_file(f.len, f.modified, f.repeat, f.cloud);
-                        t.touch(f.activity);
+                        if f.depth == 1 {
+                            let mut t = Tally::of_file(f);
+                            t.touch(f.activity);
+                            items.insert(name.clone(), t);
+                        } else {
+                            let t = items
+                                .entry(name.clone())
+                                .or_insert_with(|| Tally::new(true, f.modified));
+                            t.add_file(f.len, f.modified, f.repeat, f.cloud);
+                            t.touch(f.activity);
+                        }
                     }
                 }
                 Item::Incomplete { path, .. } => {
@@ -343,6 +395,7 @@ impl Scanner<'_> {
             cloud: t.cloud,
             pre_ticked: rule.pre_ticked(),
             duplicate_of: None,
+            identity: if t.is_folder { None } else { t.identity },
         });
     }
 
@@ -370,9 +423,7 @@ impl Scanner<'_> {
                         && let Some(name) = f.path.parts().last()
                         && names.iter().any(|p| name_matches(p, name))
                     {
-                        let mut t = Tally::new(false, f.modified);
-                        t.add_file(f.len, f.modified, f.repeat, f.cloud);
-                        hits.push((f.path.clone(), t));
+                        hits.push((f.path.clone(), Tally::of_file(f)));
                     }
                     Step::Skip
                 });
@@ -420,9 +471,7 @@ impl Scanner<'_> {
                             .is_some_and(|(_, e)| exts.iter().any(|x| x.eq_ignore_ascii_case(e)))
                     })
                 {
-                    let mut t = Tally::new(false, f.modified);
-                    t.add_file(f.len, f.modified, f.repeat, f.cloud);
-                    hits.push((f.path.clone(), t));
+                    hits.push((f.path.clone(), Tally::of_file(f)));
                 }
                 Step::Enter
             });
@@ -523,6 +572,7 @@ impl Scanner<'_> {
                         modified: f.modified,
                         cloud: f.cloud,
                         duplicate_candidate,
+                        id: f.id,
                     });
                 }
                 Step::Enter
@@ -549,21 +599,19 @@ impl Scanner<'_> {
     fn large_files(&mut self, rule: &'static Rule) {
         for f in self.search().files {
             if f.len >= LARGE_FILE_BYTES {
-                let mut t = Tally::new(false, f.modified);
-                t.add_file(f.len, f.modified, false, f.cloud);
-                self.single_file(rule, &f.path, &t);
+                self.single_file(rule, &f.path, &f.tally());
             }
         }
     }
 
     fn duplicates(&mut self, rule: &'static Rule) {
-        let candidates: Vec<Candidate> = self
-            .search()
-            .files
-            .into_iter()
+        let search = self.search().files;
+        let by_path: HashMap<&WinPath, &SearchFile> = search.iter().map(|f| (&f.path, f)).collect();
+        let candidates: Vec<Candidate> = search
+            .iter()
             .filter(|f| f.duplicate_candidate)
             .map(|f| Candidate {
-                path: f.path,
+                path: f.path.clone(),
                 len: f.len,
                 modified: f.modified,
             })
@@ -604,9 +652,10 @@ impl Scanner<'_> {
             return;
         }
         for e in extras {
-            let mut t = Tally::new(false, e.copy.modified);
-            t.add_file(e.copy.len, e.copy.modified, false, false);
-            if self.single_file(rule, &e.copy.path, &t)
+            let Some(found) = by_path.get(&e.copy.path) else {
+                continue;
+            };
+            if self.single_file(rule, &e.copy.path, &found.tally())
                 && let Some(last) = self.report.findings.last_mut()
             {
                 last.duplicate_of = Some(e.kept);
@@ -753,6 +802,29 @@ fn has_marker(project: &WinPath, markers: &[&str]) -> bool {
 
 /// Scan the green and amber rules in `at`. Only reads.
 pub fn scan(at: &Locations, layout: &SystemLayout, opts: &ScanOptions) -> ScanReport {
+    scan_in_steps(at, layout, opts, |_| {})
+}
+
+/// The duplicate rule: the slow one, which hashes files, so it runs last.
+fn is_duplicates(rule: &Rule) -> bool {
+    matches!(
+        rule.look,
+        Look::Search {
+            find: Find::Duplicates,
+            ..
+        }
+    )
+}
+
+/// [`scan`] in two steps: `first` gets every finding but the duplicates as soon as they are
+/// ready, and the full report is returned once hashing is done. Duplicates always come last in
+/// the findings, so a finding's place in the first report is its place in the full one.
+pub fn scan_in_steps(
+    at: &Locations,
+    layout: &SystemLayout,
+    opts: &ScanOptions,
+    first: impl FnOnce(&ScanReport),
+) -> ScanReport {
     let mut s = Scanner {
         at,
         layout,
@@ -766,7 +838,15 @@ pub fn scan(at: &Locations, layout: &SystemLayout, opts: &ScanOptions) -> ScanRe
     };
     // The shared walk first, timed on its own, so each rule's time below is its own work.
     s.search();
-    for rule in RULES.iter() {
+    let (later, now): (Vec<&'static Rule>, Vec<&'static Rule>) =
+        RULES.iter().partition(|r| is_duplicates(r));
+    let mut first = Some(first);
+    for rule in now.into_iter().chain(later) {
+        if is_duplicates(rule)
+            && let Some(first) = first.take()
+        {
+            first(&s.report);
+        }
         if s.stopped() {
             s.report.cancelled = true;
             break;
@@ -782,6 +862,10 @@ pub fn scan(at: &Locations, layout: &SystemLayout, opts: &ScanOptions) -> ScanRe
     }
     if s.stopped() {
         s.report.cancelled = true;
+    }
+    // Stopped before the duplicate rule: the first step is still reported.
+    if let Some(first) = first.take() {
+        first(&s.report);
     }
     s.report
 }

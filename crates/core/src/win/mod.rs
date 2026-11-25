@@ -218,6 +218,34 @@ pub(crate) fn final_path(handle: &OwnedHandle) -> Result<WinPath, OpenError> {
 }
 
 impl Opened {
+    /// Windows' number for this file or folder, read from the open handle; the same numbering the
+    /// walk reports (`None` on file systems without file IDs, e.g. FAT).
+    pub fn file_id(&self) -> Option<crate::walk::FileId> {
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_ID_INFO, FileIdInfo, GetFileInformationByHandleEx,
+        };
+        let mut info = FILE_ID_INFO {
+            VolumeSerialNumber: 0,
+            FileId: windows_sys::Win32::Storage::FileSystem::FILE_ID_128 {
+                Identifier: [0; 16],
+            },
+        };
+        // SAFETY: the handle is open; `info` is a writable FILE_ID_INFO of exactly the size given.
+        let ok = unsafe {
+            GetFileInformationByHandleEx(
+                self.handle.as_raw_handle(),
+                FileIdInfo,
+                (&raw mut info).cast(),
+                size_of::<FILE_ID_INFO>() as u32,
+            )
+        };
+        let id = info.FileId.Identifier;
+        (ok != 0 && id.iter().any(|b| *b != 0)).then_some(crate::walk::FileId {
+            volume: self.volume_serial,
+            id,
+        })
+    }
+
     /// A reader for the file's contents, on a duplicate of the checked handle, so the bytes
     /// read are those of the file that passed the check. Needs [`Access::Move`] or [`Access::Read`].
     ///

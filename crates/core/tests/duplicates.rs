@@ -7,12 +7,13 @@ mod common;
 use bytebroom_core::locations::Locations;
 use bytebroom_core::paths::WinPath;
 use bytebroom_core::rules::{DUPLICATE_MIN_BYTES, LARGE_FILE_BYTES};
-use bytebroom_core::scan::{Finding, ScanOptions, scan};
+use bytebroom_core::scan::{Finding, ScanOptions, scan, scan_in_steps};
 use bytebroom_core::win::{Access, open_no_follow, system_layout};
 use common::{CleanDir, assert_unchanged, snapshot, write_file};
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime};
 
 const DAY: Duration = Duration::from_secs(24 * 3600);
@@ -241,6 +242,65 @@ fn a_tie_on_dates_keeps_the_shortest_path() {
     assert_eq!(f.len(), 1);
     assert_eq!(h.rel(&f[0].path), "Docs\\deeper\\x.bin");
     assert_eq!(h.rel(f[0].duplicate_of.as_ref().unwrap()), "Docs\\x.bin");
+}
+
+/// Phase 3: the window shows everything but duplicates first, then the duplicates arrive. The
+/// first step's findings are the start of the full list, in the same places, so their IDs stay
+/// valid when duplicates are added.
+#[test]
+fn duplicates_arrive_in_a_second_step_after_everything_else() {
+    let h = duplicates_home();
+    let temp = h.home.join("AppData").join("Local").join("Temp");
+    put(&temp.join("old.tmp"), b"x", 40 * DAY);
+    // Two days on, so the temp file is past the 24-hour rule (it was created just now).
+    let opts = ScanOptions {
+        now: SystemTime::now() + 2 * DAY,
+        cancel: None,
+    };
+    let mut first: Option<Vec<WinPath>> = None;
+    let full = scan_in_steps(&h.locations(), &h.layout(), &opts, |r| {
+        assert!(first.is_none(), "the first step is reported once");
+        assert!(r.findings.iter().all(|f| f.rule.id != "duplicates"));
+        first = Some(r.findings.iter().map(|f| f.path.clone()).collect());
+    });
+    let first = first.expect("the first step was reported");
+    assert!(!first.is_empty());
+    let all: Vec<WinPath> = full.findings.iter().map(|f| f.path.clone()).collect();
+    assert_eq!(all[..first.len()], first[..]);
+    let rest = &full.findings[first.len()..];
+    assert!(!rest.is_empty());
+    assert!(rest.iter().all(|f| f.rule.id == "duplicates"));
+    // Duplicates carry their identity too (F1: a clean re-hashes and re-checks them).
+    assert!(rest.iter().all(|f| f.identity.is_some()));
+}
+
+/// Cancelling during the first step still reports it once and skips hashing; cancelling from
+/// the first step's report stops the duplicate step.
+#[test]
+fn cancel_stops_both_steps() {
+    let h = duplicates_home();
+    let flag = AtomicBool::new(true);
+    let opts = ScanOptions {
+        now: SystemTime::now(),
+        cancel: Some(&flag),
+    };
+    let mut calls = 0;
+    let report = scan_in_steps(&h.locations(), &h.layout(), &opts, |_| calls += 1);
+    assert_eq!(calls, 1);
+    assert!(report.cancelled);
+    assert!(report.findings.is_empty());
+
+    let flag = AtomicBool::new(false);
+    let opts = ScanOptions {
+        now: SystemTime::now(),
+        cancel: Some(&flag),
+    };
+    let report = scan_in_steps(&h.locations(), &h.layout(), &opts, |r| {
+        assert!(!r.cancelled);
+        flag.store(true, Ordering::Relaxed);
+    });
+    assert!(report.cancelled);
+    assert!(report.findings.iter().all(|f| f.rule.id != "duplicates"));
 }
 
 #[test]
