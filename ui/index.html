@@ -109,11 +109,15 @@
     <dialog id="history-dialog" aria-labelledby="history-h">
       <form method="dialog" class="dialog-body">
         <h2 id="history-h" tabindex="-1" autofocus>History</h2>
-        <p class="note">
+        <p class="note history-intro">
           What ByteBroom moved and sent to the Recycle Bin. Moved files can be put back; recycled
           items are restored from Windows' own Recycle Bin. Deleted items are gone for good.
         </p>
-        <p id="history-result" class="history-result" hidden></p>
+        <!-- Focus rests here while a put back runs; the result is announced once, below. -->
+        <p id="history-result" class="history-result" tabindex="-1" hidden></p>
+        <!-- The page's own #announce is outside this modal dialog, so screen readers can't hear
+             it while the dialog is open: History's results are announced from here instead. -->
+        <p id="history-announce" class="visually-hidden" role="status" aria-live="polite"></p>
         <div id="history-content"></div>
         <div class="dialog-actions">
           <button id="clear-history" class="danger" type="button">Clear history…</button>

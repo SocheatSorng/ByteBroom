@@ -709,28 +709,42 @@
   let historyBusy = false;
 
   /** Ask a yes/no question in the page's own dialog (decision 4: no Windows dialog for undo). */
-  function ask(title, lines, yes) {
+  // `tone` only colours the yes button: red for a loss (clearing), the calm accent for a put back.
+  function ask(title, lines, yes, tone = "danger") {
     return new Promise((resolve) => {
       const d = $("ask-dialog");
       $("ask-h").textContent = title;
       $("ask-content").replaceChildren(...lines.map((l) => (typeof l === "string" ? el("p", { text: l }) : l)));
       $("ask-yes").textContent = yes;
+      $("ask-yes").className = tone;
       d.returnValue = "";
       d.addEventListener("close", () => resolve(d.returnValue === "yes"), { once: true });
       d.showModal();
     });
   }
 
-  function showHistoryResult(text, isError = false) {
+  /** Show a result in the History dialog. The main status line is updated quietly (it is outside
+   * the modal dialog, so a screen reader can't hear it); `announce` reads it from the dialog's own
+   * live region, once. Pass false when focus is about to land on the line itself. */
+  function showHistoryResult(text, isError = false, announce = true) {
     const p = $("history-result");
     p.textContent = text;
     p.classList.toggle("error", isError);
     p.hidden = false;
-    setStatus(text.split("\n")[0], isError);
+    setStatus(text.split("\n")[0], isError, true);
+    if (announce) announceHistory();
   }
+
+  function announceHistory() {
+    const p = $("history-result");
+    $("history-announce").textContent = p.classList.contains("error") ? `Error: ${p.textContent}` : p.textContent;
+  }
+
+  const putBackButtons = () => [...$("history-content").querySelectorAll("button[data-focus^='item-']")];
 
   async function openHistory() {
     $("history-result").hidden = true;
+    $("history-announce").textContent = "";
     try {
       history = await invoke("history");
     } catch (e) {
@@ -756,7 +770,9 @@
         "div",
         { className: "history-group-head" },
         el("h4", {
-          text: `${date(g.when)}: ${plural(g.items.length, "file")} moved${still.length < g.items.length ? `, ${still.length} still moved` : ""}`,
+          text: `${date(g.when)}: ${plural(g.items.length, "file")} moved${
+            still.length === 0 ? ", all put back" : still.length < g.items.length ? `, ${still.length} still moved` : ""
+          }`,
         }),
       );
       if (g.canPutBack > 1) {
@@ -776,7 +792,7 @@
         if (m.putBackAt !== null) {
           state = el("span", { className: "history-state done", text: `Put back ${date(m.putBackAt)}` });
         } else if (m.unavailable) {
-          state = el("span", { className: "history-state", text: `Can't put back: ${m.unavailable}` });
+          state = el("span", { className: "history-state blocked", text: `Can't put back: ${m.unavailable}` });
         } else {
           state = el("button", {
             type: "button",
@@ -812,7 +828,7 @@
       box.append(
         el(
           "p",
-          {},
+          { className: "history-bin" },
           "Restore these from the Recycle Bin itself (select, then Restore). ",
           el("button", {
             type: "button",
@@ -823,7 +839,7 @@
         ),
         el(
           "ul",
-          { className: "history-list" },
+          { className: "history-list history-recycled" },
           ...h.recycled.map((r) =>
             el(
               "li",
@@ -858,22 +874,33 @@
         "Each file is copied back and checked; the moved copy is removed only after the copy matches. Nothing already at the original place is replaced.",
       ].filter((l) => l !== null),
       "Put back",
+      "primary",
     );
     if (!ok) return;
+    // Where the clicked row sat among the Put back buttons, so focus can go to the next one.
+    const prefix = item ? `item-${group.group}-${item.item}` : `item-${group.group}-`;
+    const at = Math.max(0, putBackButtons().findIndex((b) => b.dataset.focus.startsWith(prefix)));
     historyBusy = true;
     renderHistory();
-    showHistoryResult("Putting back… each file is checked before the moved copy is removed.");
+    // The buttons are disabled while it runs: focus waits on the progress line, which it reads.
+    showHistoryResult("Putting back… each file is checked before the moved copy is removed.", false, false);
+    $("history-result").focus();
     try {
       const done = await invoke("put_back", {
         which: { list: history.list, group: group.group, item: item ? item.item : null },
       });
       history = done.history;
-      showHistoryResult(done.message, done.message.includes("\n") || done.message.includes("was not"));
+      showHistoryResult(done.message, done.message.includes("\n") || done.message.includes("was not"), false);
     } catch (e) {
-      showHistoryResult(errorText(e), true);
+      showHistoryResult(errorText(e), true, false);
     } finally {
       historyBusy = false;
       renderHistory();
+      // Focus goes to the next Put back button (or stays on the result line if none is left),
+      // then the result is announced once, after the focus move so it isn't cut off.
+      const left = putBackButtons();
+      if (left.length > 0) left[Math.min(at, left.length - 1)].focus();
+      announceHistory();
     }
   }
 
@@ -890,12 +917,16 @@
     historyBusy = true;
     try {
       history = await invoke("clear_history");
-      showHistoryResult("History cleared. No file was touched.");
+      showHistoryResult("History cleared. No file was touched.", false, false);
     } catch (e) {
-      showHistoryResult(errorText(e), true);
+      showHistoryResult(errorText(e), true, false);
     } finally {
       historyBusy = false;
       renderHistory();
+      // Clear history… is disabled once nothing is left, so focus moves to the result line,
+      // which reads it; otherwise focus stays on the button and the result is announced. Once.
+      if ($("clear-history").disabled) $("history-result").focus();
+      else announceHistory();
     }
   }
 

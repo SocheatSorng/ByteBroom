@@ -528,7 +528,8 @@ select {
 
 /* Until the word is typed the button is plainly unavailable: no red fill, a dashed edge and
    readable muted text, instead of a faded red that looks almost ready. */
-.red-action-row button.danger:disabled {
+.red-action-row button.danger:disabled,
+#clear-history:disabled {
   opacity: 1;
   background: var(--panel);
   border: 1px dashed var(--control-edge);
@@ -685,54 +686,104 @@ label.confirm,
 
 /* ---- History (phase 5) ---- */
 
+/* The dialog never grows past the window: its heading, intro and buttons stay put and only the
+   lists scroll, so "Clear history…" and "Close" are always in view, even at 720x520. */
+#history-dialog {
+  width: min(820px, calc(100vw - 40px));
+}
+
+#history-dialog .dialog-body {
+  max-height: calc(100vh - 42px);
+}
+
+.history-intro,
+#history-content .note {
+  margin: 0;
+}
+
 #history-content {
-  max-height: 60vh;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: auto;
+  /* Room for focus rings at the scroll edges, without shifting the content's left edge. */
+  margin: -4px -4px 0;
+  padding: 4px;
 }
 
 #history-content h3 {
-  margin: 14px 0 6px;
+  margin: 18px 0 8px;
 }
 
-.history-group {
+#history-content h3:first-child {
+  margin-top: 0;
+}
+
+.history-group,
+.history-recycled {
   border: 1px solid var(--line);
   border-radius: 6px;
   margin: 0 0 10px;
-  padding: 8px 10px;
+  background: var(--panel);
 }
 
 .history-group-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: 6px 10px;
+  padding: 7px 10px;
+  background: var(--row-hover);
+  border-radius: 5px 5px 0 0;
 }
 
 .history-group-head h4 {
   margin: 0;
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .history-list {
   list-style: none;
-  margin: 6px 0 0;
+  margin: 0;
   padding: 0;
 }
 
 .history-list li {
-  padding: 6px 0;
+  padding: 8px 10px;
   border-top: 1px solid var(--line);
 }
 
+.history-recycled li:first-child {
+  border-top: none;
+}
+
+/* Name | size | Put back (or its state). The size and button columns keep one width, so sizes
+   line up from row to row. */
 .history-item {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 5.5em minmax(9.5em, auto);
   align-items: center;
-  gap: 10px;
+  gap: 4px 12px;
 }
 
 .history-item strong {
-  flex: 1;
   min-width: 0;
+  font-weight: 600;
   overflow-wrap: anywhere;
+}
+
+.history-item .num {
+  color: var(--muted);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.history-item > button,
+.history-state {
+  justify-self: end;
+  text-align: right;
 }
 
 .history-state {
@@ -741,19 +792,81 @@ label.confirm,
 
 .history-state.done {
   color: var(--green);
+  font-weight: 600;
+}
+
+/* "Can't put back: why" is a sentence, not a column: it gets its own line under the name. The
+   words say it, the amber is only a hint. */
+.history-state.blocked {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  justify-self: start;
+  text-align: left;
+  padding: 1px 8px;
+  border-radius: 4px;
+  font-size: 13px;
+  background: var(--amber-bg);
+  color: var(--amber);
 }
 
 .history-paths {
+  margin-top: 2px;
   font-size: 12px;
   color: var(--muted);
   overflow-wrap: anywhere;
 }
 
+.history-bin {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  margin: 0 0 10px;
+}
+
 .history-result {
   white-space: pre-line;
-  margin: 8px 0;
+  overflow-wrap: anywhere;
+  margin: 0;
+  padding: 8px 12px;
+  border-left: 4px solid var(--accent);
+  border-radius: 4px;
+  background: var(--row-hover);
 }
 
 .history-result.error {
+  border-left-color: var(--danger);
+  background: var(--red-bg);
   color: var(--danger);
+}
+
+/* The yes/no question: narrower than the lists, and long names and paths wrap. */
+#ask-dialog {
+  width: min(560px, calc(100vw - 40px));
+}
+
+#ask-dialog .dialog-body {
+  max-height: calc(100vh - 42px);
+}
+
+#ask-h,
+#ask-content {
+  overflow-wrap: anywhere;
+}
+
+#ask-content {
+  min-height: 0;
+  overflow: auto;
+}
+
+#ask-content > p {
+  margin: 0 0 10px;
+}
+
+#ask-content > p:last-child {
+  margin-bottom: 0;
+}
+
+#ask-content .path-list {
+  margin: 0 0 10px;
 }
