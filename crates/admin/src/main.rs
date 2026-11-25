@@ -3,7 +3,7 @@
 //! The window stays unelevated; when the owner asks for a red-tier action, it starts this
 //! helper through UAC with one action word. The helper, in this order:
 //!
-//! 1. loads later DLLs from System32 only;
+//! 1. loads DLLs from System32 only and makes System32 its current folder;
 //! 2. takes exactly one action word from the fixed list, or stops (`BadArgs`);
 //! 3. checks that it lives in an admin-owned place, or stops (`UntrustedLocation`);
 //! 4. checks that it is elevated, or stops (`NotElevated`);
@@ -16,7 +16,7 @@
 
 use bytebroom_core::admin::{AdminAction, Exit, parse_args};
 use bytebroom_core::win::admin::{
-    is_elevated, load_dlls_from_system32_only, location_problem, own_exe,
+    enter_system32, is_elevated, load_dlls_from_system32_only, location_problem, own_exe,
 };
 use std::process::ExitCode;
 
@@ -44,7 +44,7 @@ fn run(action: AdminAction) -> Exit {
 }
 
 fn main() -> ExitCode {
-    if !load_dlls_from_system32_only() {
+    if !load_dlls_from_system32_only() || !enter_system32() {
         return ExitCode::from(Exit::Failed.code());
     }
     let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();

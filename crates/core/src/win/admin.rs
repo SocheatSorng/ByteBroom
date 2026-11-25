@@ -20,12 +20,16 @@ use windows_sys::Win32::Security::{
 use windows_sys::Win32::System::LibraryLoader::{
     GetModuleFileNameW, LOAD_LIBRARY_SEARCH_SYSTEM32, SetDefaultDllDirectories,
 };
+use windows_sys::Win32::System::Registry::{
+    HKEY, HKEY_LOCAL_MACHINE, KEY_READ, RegCloseKey, RegOpenKeyExW,
+};
+use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
 use windows_sys::Win32::System::Threading::{
     GetCurrentProcess, GetExitCodeProcess, OpenProcessToken, WaitForSingleObject,
 };
 use windows_sys::Win32::UI::Shell::{
-    FOLDERID_ProgramFiles, SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW,
-    ShellExecuteExW,
+    FOLDERID_ProgramFiles, SEE_MASK_CLASSKEY, SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS,
+    SHELLEXECUTEINFOW, ShellExecuteExW,
 };
 
 const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
@@ -175,7 +179,9 @@ pub fn location_problem(exe: &WinPath) -> Option<String> {
             Err(e) => return Some(format!("{path}: {e}")),
         };
         if opened.resolved.is_reparse_point || opened.resolved.final_path != path {
-            return Some(format!("{path} is reached through a link"));
+            return Some(format!(
+                "{path} is not exactly where expected (a link, or a different name)"
+            ));
         }
         let Some(sec) = security_of(&opened) else {
             return Some(format!("{path}: its permissions can't be read"));
@@ -253,6 +259,43 @@ pub fn helper_path() -> Option<WinPath> {
         .ok()
 }
 
+/// `HKLM\SOFTWARE\Classes\exefile`, opened read-only: the machine-wide class for programs.
+struct MachineClass(HKEY);
+
+impl MachineClass {
+    fn open() -> Option<Self> {
+        let sub = wide("SOFTWARE\\Classes\\exefile");
+        let mut key: HKEY = std::ptr::null_mut();
+        // SAFETY: `sub` is NUL-terminated; `key` receives a key handle closed in Drop.
+        let err = unsafe { RegOpenKeyExW(HKEY_LOCAL_MACHINE, sub.as_ptr(), 0, KEY_READ, &mut key) };
+        (err == 0 && !key.is_null()).then_some(Self(key))
+    }
+}
+
+impl Drop for MachineClass {
+    fn drop(&mut self) {
+        // SAFETY: the key was opened by RegOpenKeyExW and is closed once.
+        unsafe { RegCloseKey(self.0) };
+    }
+}
+
+/// Windows' System32 folder, from the API (not an environment variable).
+pub fn system32() -> Option<WinPath> {
+    let mut buf = vec![0u16; 512];
+    // SAFETY: `buf` is writable for its length.
+    let len = unsafe { GetSystemDirectoryW(buf.as_mut_ptr(), buf.len() as u32) } as usize;
+    if len == 0 || len >= buf.len() {
+        return None;
+    }
+    WinPath::parse(&String::from_utf16(&buf[..len]).ok()?).ok()
+}
+
+/// Make System32 this process's current folder, so nothing is looked up in a folder the user
+/// chose (review S4). Called by the helper before anything else.
+pub fn enter_system32() -> bool {
+    system32().is_some_and(|dir| std::env::set_current_dir(dir.to_string()).is_ok())
+}
+
 /// Why starting the helper didn't give an answer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LaunchError {
@@ -279,21 +322,30 @@ pub fn run_elevated(action: AdminAction, parent: isize) -> Result<Exit, LaunchEr
     if let Some(why) = location_problem(&exe) {
         return Err(LaunchError::Untrusted(why));
     }
+    // The verb is looked up in the machine's own program class, never the per-user one, which
+    // the user's account could override to start another program at the prompt (review S2).
+    let class = MachineClass::open()
+        .ok_or_else(|| LaunchError::Failed("Windows' program class can't be read".into()))?;
+    // The elevated helper starts in System32, not in a folder the user chose (review S4).
+    let dir = system32().ok_or_else(|| LaunchError::Failed("System32 can't be found".into()))?;
     let verb = wide("runas");
     let file = wide(&exe.to_string());
     let params = wide(action.arg());
+    let directory = wide(&dir.to_string());
     let mut info = SHELLEXECUTEINFOW {
         cbSize: size_of::<SHELLEXECUTEINFOW>() as u32,
-        fMask: SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC,
+        fMask: SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC | SEE_MASK_CLASSKEY,
         hwnd: parent as _,
         lpVerb: verb.as_ptr(),
         lpFile: file.as_ptr(),
         lpParameters: params.as_ptr(),
+        lpDirectory: directory.as_ptr(),
         nShow: SW_HIDE,
+        hkeyClass: class.0,
         // SAFETY: SHELLEXECUTEINFOW is plain data; all-zero is its documented empty state.
         ..unsafe { std::mem::zeroed() }
     };
-    // SAFETY: `info` and every string it points to live until the call returns.
+    // SAFETY: `info`, every string it points to and the class key live until the call returns.
     if unsafe { ShellExecuteExW(&mut info) } == 0 {
         let err = std::io::Error::last_os_error();
         return Err(if err.raw_os_error() == Some(ERROR_CANCELLED as i32) {

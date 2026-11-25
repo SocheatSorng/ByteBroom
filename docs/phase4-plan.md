@@ -270,7 +270,36 @@ Each task: code → tests → fmt + clippy → full tests → build → commit w
   restore point can't bring those files back. So it needs no helper, no UAC prompt and no
   restore point (decision 8, owner: yes).
 - [x] **1. The helper skeleton and the elevation path (no actions yet)**: built and tested
-  2026-11-25; the real UAC round trip waits for the owner (steps under "Owner check for task 1")
+  2026-11-25; the real UAC round trip waits for the owner (steps under "Owner check for task 1").
+  - **Security review** (2026-11-25): no must-fix. Should-fixes, all fixed with tests:
+    - **S1:** the install script runs no copied program elevated. It always starts from a fresh
+      folder, and checks the folder's and the file's permissions with a PowerShell copy of the
+      helper's rule (`tools/helper-acl.ps1`), which a test cross-checks against the Rust rule
+      on real files. Remaining trust: the helper is copied from `target\release`, which the
+      owner's account can change (stated in the script and the README).
+    - **S2:** UAC's `runas` verb is looked up in `HKLM\SOFTWARE\Classes\exefile`
+      (`SEE_MASK_CLASSKEY`), never the per-user class, which the user's account could
+      override. The owner checks the prompt names `bytebroom-admin.exe` in
+      `C:\Program Files\ByteBroom`.
+    - **S3:** the helper is linked with `/DEPENDENTLOADFLAG:0x800`, so even its start-up DLLs
+      come only from System32. A test reads the flag from the built program's PE header, and
+      fails without it.
+    - **S4:** the helper starts in System32 (`lpDirectory`) and makes it its current folder
+      first thing.
+    - **N4:** a path that isn't exactly the expected one is reported as such, not as "a link".
+  - **Rules from the review for tasks 2 and 4:**
+    - **N1:** the restore point is made or verified *inside* the helper, in the same run as
+      each action, which refuses without it. The app never sequences a separate restore-point
+      call: the unelevated app can be tampered with.
+    - **N2:** the helper starts Windows tools by their full System32 path (from
+      `GetSystemDirectoryW`), with a minimal explicit environment block (no inherited `PATH`,
+      `PSModulePath`, `windir` or `SystemRoot`).
+      - PowerShell gets `-NoProfile -NonInteractive`, and the Delivery Optimization module is
+        imported by its full System32 path.
+      - `powercfg` is started the same way.
+  - **Still open (N3):** a test with a crafted access list that has an admin owner and a
+    single bad entry. Setting an admin owner needs administrator rights, so it waits for a
+    harness the owner runs; the pure rules cover these cases in tables.
   - Acceptance:
     - `bytebroom-admin.exe` accepts only the fixed action names; anything else exits with an
       error and does nothing;
@@ -339,12 +368,14 @@ In your project folder:
 1. In an ordinary PowerShell, run `./build.ps1`.
 2. In an **administrator** PowerShell, run `./tools/install-helper.ps1`.
 
-   Expected: "Installed: C:\Program Files\ByteBroom\bytebroom-admin.exe … The helper accepts its
-   place." Any other answer stops the script; tell Claude what it said.
+   Expected: "Installed: C:\Program Files\ByteBroom\bytebroom-admin.exe … Only administrators can
+   change it." Any other answer stops the script; tell Claude what it said.
 3. Back in the **ordinary** PowerShell, run
    `cargo run --release -p bytebroom-admin --example elevate_noop`.
-   - A UAC prompt for `bytebroom-admin.exe` appears. Check that it names that program, then
-     click **Yes**. Expected: `Answer: Done (done)`.
+   - A UAC prompt appears. Click **Show more details**: the program location must be
+     `"C:\Program Files\ByteBroom\bytebroom-admin.exe" noop`. If it names anything else,
+     click **No** and tell Claude.
+   - If it matches, click **Yes**. Expected: `Answer: Done (done)`.
    - Run it again and click **No**. Expected: `Not run: Cancelled`.
 4. Tell Claude. Claude checks read-only that only `Program Files\ByteBroom\bytebroom-admin.exe`
    was added.

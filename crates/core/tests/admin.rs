@@ -84,3 +84,40 @@ fn the_helper_is_looked_for_only_in_program_files() {
         "{p}"
     );
 }
+
+/// Review S1: the install script checks the installed helper with a PowerShell copy of the
+/// rule (`tools/helper-acl.ps1`). On the same real files it must agree with the Rust rule: an
+/// admin-owned System32 program passes both, a file in the user's temp folder fails both.
+#[test]
+fn the_install_scripts_rule_agrees_with_the_helpers() {
+    let script = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("tools")
+        .join("helper-acl.ps1");
+    let ps = |path: &str| -> String {
+        let cmd = format!(
+            ". '{}'; $p = Get-AdminOwnedProblem '{}'; if ($p) {{ \"PROBLEM: $p\" }} else {{ 'OK' }}",
+            script.display(),
+            path
+        );
+        let out = std::process::Command::new("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &cmd])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    let cmd = system_layout()
+        .system_root
+        .join("System32")
+        .unwrap()
+        .join("cmd.exe")
+        .unwrap();
+    assert_eq!(ps(&cmd.to_string()), "OK");
+    let dir = CleanDir::new("adm-ps");
+    let exe = dir.0.join("bytebroom-admin.exe");
+    write_file(&exe, b"x");
+    let out = ps(exe.to_str().unwrap());
+    assert!(out.starts_with("PROBLEM:"), "{out}");
+    assert!(location_problem(&real(&exe)).is_some());
+}

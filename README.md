@@ -111,7 +111,10 @@ through Windows' UAC prompt, which only you click. The helper has no window and 
 action per run. It runs only from an admin-owned folder, `Program Files\ByteBroom`, and refuses
 anywhere else, so ordinary programs can't swap it. To put it there, run
 `./tools/install-helper.ps1` in an administrator PowerShell in your project folder; to remove
-it, run `./tools/uninstall-helper.ps1` the same way.
+it, run `./tools/uninstall-helper.ps1` the same way. The script copies the helper from your build
+folder, which your own account can change, so run `./build.ps1` and the install one after the
+other on a PC you trust. When the UAC prompt appears, **Show more details** must name
+`C:\Program Files\ByteBroom\bytebroom-admin.exe`; if it names anything else, click No.
 
 To check the window's look without scanning anything, run `node tools/ui-harness/serve.mjs` and open
 the address it prints. It serves the real page with made-up findings and never runs ByteBroom.
