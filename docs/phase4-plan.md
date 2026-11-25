@@ -586,6 +586,20 @@ copy.
    then on again), the Delivery Optimization cache size, `rstrui.exe` / the System Restore and
    VSS event logs, and `ByteBroom\bytebroom.log` (the Recycle Bin dialog's answers).
 
+**Result (2026-11-25, 21:54 to 22:04), steps 3 to 5 passed; step 2 waits for 2026-11-26.**
+
+- **Restore point:** System Restore logged 8216 ("Skipping creation") for `restore-point`,
+  `hibernation-off` and `delivery-optimization-cache`. The 19:23 point was under 24 hours old,
+  so it was reused, and listed before each action ran. No VSS error. A fresh point is still to
+  prove (step 2).
+- **Hibernation off:** done. `powercfg /a`: "Hibernation has not been enabled"; `hiberfil.sys`
+  gone.
+- **Delivery Optimization cache:** done; the cache reports no entries.
+- **Recycle Bin:** the log has `empty-recycle-bin` Cancel (6.7 s), then Confirm (4.1 s). The bin
+  is empty, but the window said Windows "did not empty" it: `SHEmptyRecycleBinW` returns an
+  error for a bin that is already empty. **Fixed:** the window now checks the bin's size first
+  and says "The Recycle Bin is already empty: nothing to do."
+
 Then, on your yes, Claude merges `phase-4-elevation` into `main` with `--ff-only` and runs the
 checks and the build on `main` again.
 

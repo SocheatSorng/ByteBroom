@@ -343,6 +343,11 @@ async fn run_red_action(
         let red = action.action();
         match red.admin_action() {
             None => {
+                // Windows reports an error when asked to empty an empty bin (owner's check,
+                // 2026-11-25), so say so plainly instead of asking.
+                if bytebroom_core::win::red::recycle_bin_size() == Some(0) {
+                    return Ok("The Recycle Bin is already empty: nothing to do.".to_string());
+                }
                 let verdict = confirm::ask_empty_recycle_bin(&app, base.as_ref());
                 if let Some(why) = confirm::empty_refusal(verdict) {
                     return Err(why.to_string());
@@ -351,7 +356,7 @@ async fn run_red_action(
                 bytebroom_core::win::recycle::empty_recycle_bin(parent)
                     .map(|()| "The Recycle Bin was emptied.".to_string())
                     .map_err(|_| {
-                        "Windows did not empty the Recycle Bin (it may already be empty)."
+                        "Windows did not empty the Recycle Bin."
                             .to_string()
                     })
             }
