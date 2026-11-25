@@ -277,7 +277,10 @@ pub fn clean_view(results: &[ActionResult], move_to: Option<&WinPath>) -> CleanV
         })
         .collect();
     CleanView {
-        freed_now: actions.iter().map(|a| a.bytes_freed + a.bytes_moved).sum(),
+        // The engine's `bytes_freed` already includes moved bytes that really came back (another
+        // drive, no other hard links); adding `bytes_moved` would count a move twice (owner's
+        // real test: 1.2 GB moved showed as 2.4 GB back).
+        freed_now: actions.iter().map(|a| a.bytes_freed).sum(),
         recycled: actions.iter().map(|a| a.bytes_recycled).sum(),
         actions,
         move_to: move_to.map(ToString::to_string),
@@ -361,5 +364,45 @@ pub fn scan_view(snap: &Snapshot, seen: u32, layout: &SystemLayout) -> ScanView 
                 why: s.why.clone(),
             })
             .collect(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bytebroom_core::engine::Outcome;
+    use bytebroom_core::preview::Action;
+
+    fn result(action: Action, freed: u64, recycled: u64, moved: u64) -> ActionResult {
+        ActionResult {
+            action,
+            outcome: Outcome {
+                bytes_freed: freed,
+                bytes_recycled: recycled,
+                bytes_moved: moved,
+                ..Outcome::default()
+            },
+        }
+    }
+
+    /// Owner's real test: a 1.2 GB move to another drive showed "2.4 GB back". The engine counts
+    /// a move that frees space in both `bytes_moved` and `bytes_freed`; only the latter is space
+    /// back.
+    #[test]
+    fn space_back_counts_a_move_once_and_the_bin_not_at_all() {
+        let gb = 1024 * 1024 * 1024;
+        let view = clean_view(
+            &[
+                result(Action::Delete, 26 * 1024 * 1024, 0, 0),
+                result(Action::Move, gb, 0, gb),
+                result(Action::Recycle, 0, 5000, 0),
+            ],
+            None,
+        );
+        assert_eq!(view.freed_now, gb + 26 * 1024 * 1024);
+        assert_eq!(view.recycled, 5000);
+        // A move within one drive moves bytes but frees none.
+        let same_drive = clean_view(&[result(Action::Move, 0, 0, gb)], None);
+        assert_eq!(same_drive.freed_now, 0);
     }
 }

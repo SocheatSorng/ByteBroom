@@ -181,7 +181,8 @@
       return {
         action: a.action,
         removed: a.items.length - skipped.length,
-        bytesFreed: a.action === "delete" ? doneBytes : 0,
+        // As the engine: a move to another drive counts as freed and as moved.
+        bytesFreed: a.action === "delete" || a.action === "move" ? doneBytes : 0,
         bytesRecycled: a.action === "recycle" ? doneBytes : 0,
         bytesMoved: a.action === "move" ? doneBytes : 0,
         skipped,
@@ -190,7 +191,7 @@
     });
     return {
       actions,
-      freedNow: actions.reduce((s, a) => s + a.bytesFreed + a.bytesMoved, 0),
+      freedNow: actions.reduce((s, a) => s + a.bytesFreed, 0),
       recycled: actions.reduce((s, a) => s + a.bytesRecycled, 0),
       moveTo: pv.moveTo,
     };
