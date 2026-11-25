@@ -115,3 +115,14 @@ one you typed when you made it. Neither is ever in this repository or on GitHub.
   that carries the new public key at once, and say in its release notes why. Until users have
   that version, an update signed with the old key would still be accepted, so watch the
   repository's Releases for anything you didn't publish.
+
+Two rules for the key:
+
+- **Never sign a test build with it.** A genuinely signed installer stays valid for good. A test
+  build signed as, say, 9.9.9 could be served later as an "update" to everyone. Test with a
+  throwaway key, as the tests do.
+- **Known limit:** the installer has no paid Authenticode certificate. Windows' administrator
+  prompt therefore shows "Unknown publisher" for every ByteBroom installer, genuine or not. The
+  updater checks the signature before it starts the installer. A program already running as you
+  could still swap the downloaded file in your temp folder in that moment. Install updates only on
+  a PC you trust. A paid certificate (out of scope for V1) would let the prompt name the publisher.

@@ -14,8 +14,9 @@ you confirm.
 2. Run it. ByteBroom has no paid code-signing certificate yet, so Windows SmartScreen may say
    "Windows protected your PC": click **More info**, check the app name, then **Run anyway**.
 3. Windows asks for administrator rights (UAC): the installer puts ByteBroom for all users in
-   `Program Files\ByteBroom`, a folder only administrators can change. Keep that folder: the
-   red-tier buttons only work from there.
+   `Program Files\ByteBroom`, a folder only administrators can change. It installs nowhere else
+   (the folder page won't go on with another folder): in a folder ordinary programs can change,
+   they could swap ByteBroom or the uninstaller that every update runs as administrator.
 
 **Updates.** When ByteBroom starts, it asks this repository's Releases once whether a newer version
 is out. If so, it shows "ByteBroom X is available. Install it now?". Nothing is downloaded until you
@@ -171,8 +172,9 @@ To run the window, install the Tauri CLI once with `cargo install --locked tauri
 `target\release\bundle\nsis`. After installing, `./tools/verify-install.ps1` checks, read-only,
 that both programs are in `Program Files\ByteBroom` and only administrators can change them.
 
-A signed release is made on your PC with `./release.ps1`. It runs every check, builds the
-installer, signs it with the key in `%LOCALAPPDATA%\ByteBroom-signing` (you type its password), writes
+A signed release is made on your PC with `./release.ps1`, in a fresh PowerShell that you close
+afterwards. It runs every check, builds the installer with no secret in reach of the build, then
+signs it with the key in `%LOCALAPPDATA%\ByteBroom-signing` (you type its password), writes
 `latest.json`, and checks all three independently with `node tools/verify-release.mjs`. It uploads
 nothing: you attach the files it lists to a GitHub release named `v<version>` in the browser. Keep
 an offline copy of the key and its password: without them, installed copies can never be updated.

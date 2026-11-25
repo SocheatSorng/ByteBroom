@@ -1,12 +1,13 @@
 # Builds a signed ByteBroom release on your PC (phase 6, owner's decisions 3 and 4): the checks,
 # the per-machine installer with the helper, its updater signature, and latest.json, then checks
 # the result independently (tools/verify-release.mjs). The private key never leaves your PC.
-# Usage (in your project folder, in your own PowerShell):  ./release.ps1
-# You type the signing key's password when asked; nothing is uploaded. At the end it prints the
-# three files to attach to a GitHub release named v<version>, in the browser.
+# Usage: open a new PowerShell, go to your project folder, run  ./release.ps1  and close that
+# PowerShell afterwards. You type the signing key's password when asked; nothing is uploaded. At the
+# end it prints the three files to attach to a GitHub release named v<version>, in the browser.
 # 'Continue', not 'Stop': cargo writes progress to stderr (see check.ps1).
 $ErrorActionPreference = 'Continue'
 Set-Location -Path $PSScriptRoot
+. (Join-Path $PSScriptRoot 'tools\build-common.ps1')
 
 # The key lives outside every repo (decision 4); only its .pub is compared, never printed.
 $keyDir = Join-Path $env:LOCALAPPDATA 'ByteBroom-signing'
@@ -21,6 +22,7 @@ if ((Get-Content -Raw -LiteralPath $pub).Trim() -ne $conf.plugins.updater.pubkey
 }
 
 $dirty = git status --porcelain
+if ($LASTEXITCODE -ne 0) { throw 'git could not read this folder: run this in your project folder.' }
 if ($dirty) { throw 'Commit or put aside your changes first: a release is built from a clean commit.' }
 $commit = git rev-parse --short HEAD
 $branch = git rev-parse --abbrev-ref HEAD
@@ -32,40 +34,33 @@ Write-Host '== Checks'
 & (Join-Path $PSScriptRoot 'check.ps1')
 if ($LASTEXITCODE -ne 0) { throw 'Checks failed: nothing was built.' }
 
-Write-Host '== Build the elevated helper (release)'
-cargo build --release -p bytebroom-admin
-if ($LASTEXITCODE -ne 0) { throw "Helper build failed (exit $LASTEXITCODE)" }
-$binaries = Join-Path $PSScriptRoot 'src-tauri\binaries'
-New-Item -ItemType Directory -Force -Path $binaries | Out-Null
-Copy-Item -LiteralPath 'target\release\bytebroom-admin.exe' -Destination (Join-Path $binaries 'bytebroom-admin-x86_64-pc-windows-msvc.exe') -Force
-
+# Build first, with no key or password anywhere in the environment: cargo runs every dependency's
+# build script and macros, and none of them may see the secrets (security review S1).
 $nsis = Join-Path $PSScriptRoot 'target\release\bundle\nsis'
-if (Test-Path -LiteralPath $nsis) { Get-ChildItem -LiteralPath $nsis -File | Remove-Item -Force }
-
-Write-Host '== Build and sign the installer'
-$secure = Read-Host -AsSecureString 'Signing key password (typed by you, not stored)'
-$bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
-try {
-    # Set for this process only, and removed again below.
-    $env:TAURI_SIGNING_PRIVATE_KEY = $key
-    $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
-    Push-Location (Join-Path $PSScriptRoot 'src-tauri')
-    cargo tauri build --config tauri.installer.json --config tauri.release.json
-    $code = $LASTEXITCODE
-    Pop-Location
-} finally {
-    Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD -ErrorAction SilentlyContinue
-    Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY -ErrorAction SilentlyContinue
-    [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
-}
-if ($code -ne 0) { throw "Build or signing failed (exit $code). A wrong password fails here." }
+if (Test-Path -LiteralPath $nsis) { Get-ChildItem -LiteralPath $nsis -File | Remove-Item -Force -ErrorAction Stop }
+& (Join-Path $PSScriptRoot 'build.ps1')
+if (-not $?) { throw 'The build failed: nothing was signed.' }
 
 $setupName = "ByteBroom_${version}_x64-setup.exe"
 $setup = Join-Path $nsis $setupName
 $sig = "$setup.sig"
-if (-not (Test-Path -LiteralPath $setup) -or -not (Test-Path -LiteralPath $sig)) {
-    throw "Expected $setupName and its .sig in $nsis."
+if (-not (Test-Path -LiteralPath $setup)) { throw "Expected $setupName in $nsis." }
+
+Write-Host '== Sign the installer'
+$secure = Read-Host -AsSecureString 'Signing key password (typed by you, not stored)'
+$bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+try {
+    # Only the signer runs while these are set, and they are removed again below.
+    $env:TAURI_SIGNING_PRIVATE_KEY_PATH = $key
+    $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+    cargo tauri signer sign --app-version $version $setup
+    $code = $LASTEXITCODE
+} finally {
+    Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD -ErrorAction SilentlyContinue
+    Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY_PATH -ErrorAction SilentlyContinue
+    [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
 }
+if ($code -ne 0 -or -not (Test-Path -LiteralPath $sig)) { throw "Signing failed (exit $code). A wrong password fails here." }
 
 Write-Host '== latest.json'
 $latest = [ordered]@{
@@ -94,3 +89,4 @@ foreach ($f in @($setup, $sig, $latestPath)) {
     Write-Host "  $(Split-Path -Leaf $f)  SHA-256 $hash"
 }
 Write-Host 'Put the SHA-256 lines in the release notes. Updates reach users once the release is published (not a draft or pre-release).'
+Write-Host 'Now close this PowerShell window, so the password leaves memory.'

@@ -68,7 +68,8 @@ export function check(latest, installer, pubkeyB64) {
     .find((f) => f.startsWith("version:"))
     ?.slice("version:".length);
   if (!signedVersion) fail("the signature carries no version (requireSignedVersion would refuse it)");
-  if (signedVersion.replace(/^v/, "") !== String(latest.version).replace(/^v/, ""))
+  // Exactly equal, with no "v" either side: stricter than the updater, never looser.
+  if (signedVersion !== String(latest.version))
     fail(`signed for ${signedVersion}, but latest.json says ${latest.version}`);
   const url = String(entry.url);
   const expected = `${REPO_RELEASES}v${latest.version}/`;

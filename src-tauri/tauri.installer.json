@@ -4,8 +4,10 @@
     "targets": ["nsis"],
     "externalBin": ["binaries/bytebroom-admin"],
     "windows": {
+      "allowDowngrades": false,
       "nsis": {
-        "installMode": "perMachine"
+        "installMode": "perMachine",
+        "installerHooks": "./windows/hooks.nsh"
       }
     }
   }

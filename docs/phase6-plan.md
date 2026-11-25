@@ -52,7 +52,7 @@ fast-forward to `main` first.
   - `origin` is `github.com/SocheatSorng/ByteBroom`; only the foundation commit is pushed;
   - LICENSE is MIT;
   - every commit uses the noreply email.
-- **Version:** `0.3.0` in the workspace `Cargo.toml`.
+- **Version:** `0.3.0` in the workspace `Cargo.toml` (1.0.0 after this phase).
 - **The page boundary** (`src-tauri/tests/boundary.rs`) pins the app's dependencies to
   `bytebroom-core`, `serde`, `tauri` and `tauri-plugin-dialog`. Adding the updater plugin changes
   that pin on purpose (spec: "ask first: adding a crate dependency; changing the release and
@@ -206,4 +206,82 @@ Each task: code → tests → fmt + clippy → full tests → build → commit w
 
 ## Results
 
-(to be filled in)
+Built 2026-11-26, version 1.0.0. `./check.ps1` and `./build.ps1` pass.
+
+- **Facts checked** (task 0, Tauri 2 docs, tauri-cli 2.12.6, tauri-plugin-updater 2.14.1 source):
+  - `bundle.resources` land in `$INSTDIR\resources`, so the helper ships as an `externalBin`
+    sidecar instead. The generated `installer.nsi` copies it to `$INSTDIR\bytebroom-admin.exe`.
+  - Per-machine installs go to `$PROGRAMFILES64\ByteBroom`.
+  - The uninstaller's "Delete the application data" box removes only `%LOCALAPPDATA%\<bundle id>`,
+    so the history in `%LOCALAPPDATA%\ByteBroom` stays (decision 8 needs no change).
+  - The Tauri CLI writes `version:` into the signed comment, so `requireSignedVersion` works.
+  - `tauri build` only *warns* when the signing key doesn't match `pubkey`; `release.ps1` refuses.
+- **Task 1, installer:** `src-tauri/tauri.installer.json` with `src-tauri/windows/hooks.nsh`.
+  Unpacking the installer showed the packed helper has the build's SHA-256.
+  `tools/verify-install.ps1` checks an install, read-only.
+- **Task 2, updater:** `src-tauri/src/update.rs`, two input-free commands, and a banner on the page.
+  - `tests/updater.rs` runs the plugin's own `verify` with throwaway keys made at test time.
+  - It refuses: a tampered file, another key, a mismatched, missing or edited signed version, and
+    garbage signatures. An older or equal version is never offered.
+  - The app has no test endpoint or switch.
+- **Tasks 3–4, release:**
+  - `release.ps1` builds with `./build.ps1` first, with no secret in the environment. It then
+    signs with `cargo tauri signer sign --app-version`.
+  - `tools/verify-release.mjs` re-checks the result in Node, written from the minisign format.
+  - `tests/release.rs` signs in Rust and verifies in Node. Removing the Node global-signature
+    check makes that test fail, as it should.
+  - Version 1.0.0 is set once in `Cargo.toml`.
+- **Task 5, docs:**
+  - the README's install, SmartScreen, update and uninstall steps;
+  - `docs/recovery.md`: update rollback, the signing key's loss or leak, never signing test
+    builds, and the unsigned-publisher limit;
+  - a docs test pins them.
+- **Task 6, reviews:**
+  - UI pass: the banner is announced through the live region, a refusal shows in red, and the
+    layout was checked at 720x520 and large, light and dark.
+  - Security review: 1 must-fix, 9 should-fix and 9 notes, all fixed with tests except where noted.
+    - **M1:** a custom install folder could be user-writable, and its `uninstall.exe` runs as
+      administrator at every update. The installer now accepts only `$PROGRAMFILES64\ByteBroom`,
+      both on the folder page and before copying in silent or passive installs. The window
+      refuses to update unless it runs unelevated from that admin-owned install.
+    - **S1:** no secret is set during the build (above).
+    - **S2:** no code may override the updater's settings (a boundary test).
+    - **S3:** no install during a red-tier action, and one install at a time.
+    - **S4, S5:** more refusal cases in both verifiers, and `allowDowngrades: false`.
+    - **S6:** the release binaries carried the owner's Windows user folder about 666 times, in
+      the cargo registry's panic paths. `build.ps1` now remaps it to `~` and fails a build that
+      still contains it. A byte search now finds 0.
+    - **S7:** the staged helper is copied with `-ErrorAction Stop` and hash-checked after the bundle.
+    - **S8:** downloads only from this repo's release of exactly the announced version.
+    - **S9:** `verify-install.ps1` also checks `uninstall.exe` and Windows' uninstall record.
+    - **Notes fixed:**
+      - N1: the private-key test also reads UTF-16 and decoded key lines;
+      - N3: no update while running as administrator;
+      - N6: `git` failures stop `release.ps1`;
+      - N7: the Node version check is exact;
+      - N9: a freshly built `installer.nsi` is checked against the config.
+    - **Notes documented, not changed:**
+      - N2: the swap window before UAC, without Authenticode (recovery.md);
+      - N4: the password stays in that PowerShell's memory, so close it after `release.ps1`;
+      - N5: never sign test builds (recovery.md);
+      - N8: WebView2's bootstrapper is downloaded when missing (Tauri's default, kept).
+- **Task 0 (the Esc question), on its own branch** `claude/phase-6-esc-dialog-efd777`, not merged
+  yet:
+  - Esc does cancel. `bytebroom.log` shows the phase 5 clean's dialog was answered "Clean them"
+    after 5.9 s.
+  - A new test proves every other answer stops both an amber move and an amber recycle.
+  - The owner's Esc check is still to do.
+- **Task 7, publishing scan** (read-only, 91 commits, all branches):
+  - every author and committer uses the noreply email;
+  - no personal paths, names or keys in tracked files or history;
+  - no history rewrite needed.
+- **Open:**
+  - merge the Esc branch (owner's decision);
+  - the owner's backup of the key;
+  - task 8 (push, green workflows);
+  - task 9 (owner check).
+- **Additions to task 9:**
+  - pick another folder on the installer's folder page, and expect **Next** to stay greyed out;
+  - run `./tools/verify-install.ps1` after installing;
+  - the updater check needs a *published* (not draft) release, because `latest/download` skips
+    drafts and pre-releases.

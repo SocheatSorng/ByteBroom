@@ -144,3 +144,42 @@ fn the_shipped_key_refuses_an_update_it_did_not_sign() {
     let update = release(&app, "9.9.9", &sign(&stranger, SETUP, Some("9.9.9")));
     assert!(matches!(update.verify(SETUP), Err(Error::Minisign(_))));
 }
+
+/// Security review S5: an older or equal version is never offered (the default comparator; no
+/// override exists in the app, see `tests/boundary.rs`).
+#[test]
+fn an_older_or_equal_version_is_never_offered() {
+    let owner = KeyPair::generate_unencrypted_keypair().unwrap();
+    let app = app_trusting(&pubkey_b64(&owner));
+    let current = app.package_info().version.to_string();
+    for version in ["0.0.1", current.as_str()] {
+        let found = app
+            .updater()
+            .unwrap()
+            .restore_update(json!({
+                "version": version,
+                "platforms": {"windows-x86_64": {
+                    "url": "https://example.invalid/ByteBroom_setup.exe",
+                    "signature": sign(&owner, SETUP, Some(version))
+                }}
+            }))
+            .unwrap();
+        assert!(
+            found.is_none(),
+            "{version} must not be offered over {current}"
+        );
+    }
+}
+
+/// Security review S4: the version inside the signature can't be edited, even when the
+/// announcement is edited to match: the global signature covers it.
+#[test]
+fn an_edited_signed_version_is_refused() {
+    let owner = KeyPair::generate_unencrypted_keypair().unwrap();
+    let app = app_trusting(&pubkey_b64(&owner));
+    let good = sign(&owner, SETUP, Some("9.9.8"));
+    let text = String::from_utf8(STANDARD.decode(&good).unwrap()).unwrap();
+    let edited = STANDARD.encode(text.replace("version:9.9.8", "version:9.9.9"));
+    let update = release(&app, "9.9.9", &edited);
+    assert!(update.verify(SETUP).is_err());
+}

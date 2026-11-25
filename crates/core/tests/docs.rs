@@ -406,7 +406,8 @@ fn the_install_update_and_release_steps_match_the_code() {
         "tools/verify-install.ps1",
         "tools/verify-release.mjs",
         "src-tauri/tauri.installer.json",
-        "src-tauri/tauri.release.json",
+        "src-tauri/windows/hooks.nsh",
+        "tools/build-common.ps1",
     ] {
         assert!(repo_root().join(file).exists(), "{file} is missing");
     }

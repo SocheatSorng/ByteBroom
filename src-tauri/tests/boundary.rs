@@ -380,24 +380,76 @@ fn no_private_key_is_in_the_repo() {
         "PRIVATE KEY-----",
         "minisign encrypted secret key",
         "minisign secret key",
-        // The base64 of "untrusted comment: rsign encrypted secret key", Tauri's key file header.
+        // Tauri's key file: base64 of "untrusted comment: rsign encrypted secret key", that
+        // header decoded, and the decoded key line ("EdScB2": an encrypted minisign secret key).
         "dW50cnVzdGVkIGNvbW1lbnQ6IHJzaWduIGVuY3J5cHRlZCBzZWNyZXQga2V5",
+        "rsign encrypted secret key",
+        "RWRTY0Iy",
     ];
     for name in String::from_utf8(out.stdout).unwrap().split('\0') {
         if name.is_empty() || name == "src-tauri/tests/boundary.rs" {
             continue;
         }
-        let Ok(text) = fs::read_to_string(root.join(name)) else {
-            continue; // binary files (icons)
+        let bytes = fs::read(root.join(name)).unwrap_or_default();
+        // As UTF-8 (or Latin-1 for binaries), and as UTF-16 (PowerShell 5.1's default output),
+        // so a key pasted into any text file is found (security review N1).
+        let utf16 = |from: usize| {
+            let units: Vec<u16> = bytes[from.min(bytes.len())..]
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|&c| u16::from_le_bytes(c))
+                .collect();
+            String::from_utf16_lossy(&units)
         };
-        for marker in markers {
-            assert!(!text.contains(marker), "{name} holds a private-key marker");
+        let texts = [
+            bytes.iter().map(|&b| b as char).collect::<String>(),
+            utf16(0),
+            utf16(1),
+        ];
+        for text in &texts {
+            for marker in markers {
+                assert!(!text.contains(marker), "{name} holds a private-key marker");
+            }
         }
         let lower = name.to_lowercase();
         assert!(
             !lower.ends_with(".key") && !lower.contains("signing"),
             "{name} looks like a key file"
         );
+    }
+}
+
+/// Security review S2: the updater runs exactly as `tauri.conf.json` says. No code may swap its
+/// key, endpoint, version rule or installer arguments, which the tests above can't see.
+#[test]
+fn no_code_overrides_the_updaters_configuration() {
+    let lib = read("src/lib.rs");
+    assert_eq!(
+        lib.matches("tauri_plugin_updater::Builder::new().build()")
+            .count(),
+        1,
+        "the plugin is set up once, with nothing between new() and build()"
+    );
+    for file in files_under(&crate_dir().join("src")) {
+        let text = fs::read_to_string(&file).unwrap();
+        for never in [
+            "version_comparator",
+            "updater_builder",
+            ".pubkey(",
+            ".endpoints(",
+            "installer_arg",
+            "dangerous",
+            "restart_after_install",
+            "on_before_exit",
+            "executable_path",
+            ".target(",
+            ".header(",
+            ".proxy(",
+            "configure_client",
+        ] {
+            assert!(!text.contains(never), "{} uses {never}", file.display());
+        }
     }
 }
 
