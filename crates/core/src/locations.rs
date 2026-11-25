@@ -151,13 +151,34 @@ impl Locations {
             },
         };
 
-        let downloads =
-            pick(Which::Downloads, &sources.downloads, &mut skipped).and_then(
-                |d| match floor_reason(&d, layout, false) {
-                    Some(why) => skip(&mut skipped, Which::Downloads, why),
-                    None => Some(d),
-                },
-            );
+        // Downloads has no environment cross-check, and its HKCU value can be changed by any program
+        // running as the user. Accept it only inside the owner's own profile, or on another drive
+        // outside every profile, so it can never point at another user's files.
+        let downloads = pick(Which::Downloads, &sources.downloads, &mut skipped).and_then(|d| {
+            if let Some(why) = floor_reason(&d, layout, false) {
+                return skip(&mut skipped, Which::Downloads, why);
+            }
+            // Ignoring case: the on-disk check respells it as Windows does afterwards.
+            let in_own_profile = profile
+                .as_ref()
+                .is_some_and(|p| d.is_at_or_inside_ignore_case(p) && !d.eq_ignore_case(p));
+            let in_any_profile = layout
+                .profile_roots
+                .iter()
+                .any(|r| d.is_at_or_inside_ignore_case(r));
+            let own_drive = profile
+                .as_ref()
+                .map_or(layout.system_root.drive(), WinPath::drive);
+            if in_own_profile || (!in_any_profile && d.drive() != own_drive) {
+                Some(d)
+            } else {
+                skip(
+                    &mut skipped,
+                    Which::Downloads,
+                    "it is neither inside your profile folder nor on another drive",
+                )
+            }
+        });
 
         let system_drive = layout.system_root.drive();
         let home_drive = profile.as_ref().map_or(system_drive, WinPath::drive);
@@ -301,8 +322,13 @@ mod tests {
         assert_eq!(l.profile, None);
         assert_eq!(l.local_app_data, None);
         assert!(skipped_for(&l, Which::LocalAppData).is_some());
-        // Downloads stands on its own.
-        assert!(l.downloads.is_some());
+        // Downloads inside a profile that is not trusted is not trusted either (security review
+        // S6); on another drive it would stand on its own.
+        assert_eq!(l.downloads, None);
+        let mut s = normal();
+        s.profile.env = Some(p("C:\\Users\\Bob"));
+        s.downloads = api_only("D:\\Downloads");
+        assert!(Locations::resolve(&s, &layout()).downloads.is_some());
     }
 
     #[test]
@@ -376,6 +402,29 @@ mod tests {
         s.downloads = api_only("D:\\Downloads");
         let l = Locations::resolve(&s, &layout());
         assert_eq!(l.downloads, Some(p("D:\\Downloads")));
+    }
+
+    #[test]
+    fn downloads_never_points_at_another_users_files() {
+        // Security review S6: the HKCU value can be steered.
+        for bad in [
+            "C:\\Users\\Bob\\Downloads",
+            "C:\\Users\\Bob\\Documents\\x",
+            "C:\\Data\\Downloads",
+        ] {
+            let mut s = normal();
+            s.downloads = api_only(bad);
+            let l = Locations::resolve(&s, &layout());
+            assert_eq!(l.downloads, None, "{bad}");
+            assert!(
+                skipped_for(&l, Which::Downloads).is_some_and(|w| w.contains("profile")),
+                "{bad}"
+            );
+        }
+        // Redirected inside the owner's own profile (e.g. OneDrive) is fine.
+        let mut s = normal();
+        s.downloads = api_only("C:\\Users\\Ann\\OneDrive\\Downloads");
+        assert!(Locations::resolve(&s, &layout()).downloads.is_some());
     }
 
     #[test]
