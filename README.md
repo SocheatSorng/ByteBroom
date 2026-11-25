@@ -94,7 +94,7 @@ and what it sent to the Recycle Bin.
   the original folder is gone (a moved folder), it is made again, but only inside a place
   ByteBroom scans. A file can't be put back directly into your profile folder or a drive root, nor
   into Windows' startup folder, the WindowsApps folder or ByteBroom's own folder: move those back
-  by hand. Putting back never runs as administrator: if you started ByteBroom with "Run as
+  by hand. Putting back never runs as administrator. If you started ByteBroom with "Run as
   administrator", putting back and clearing the history are refused; open it normally.
 - A file shows why it can't be put back now, for example when the drive it was moved to is not
   plugged in. A file that was already put back says so, and a second try changes nothing.
