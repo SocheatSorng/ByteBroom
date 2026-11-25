@@ -319,6 +319,30 @@ fn the_app_depends_only_on_approved_crates() {
     );
 }
 
+/// The UI harness (tools/ui-harness) fakes the commands in a browser; none of it may reach the
+/// app. The app has no Cargo features at all, so no build can switch fake data on, and the
+/// window's files never name the harness.
+#[test]
+fn the_app_has_no_fake_data_and_the_page_never_loads_the_harness() {
+    let manifest = read("Cargo.toml");
+    assert!(
+        !manifest.contains("[features]"),
+        "the app has no Cargo features"
+    );
+    for file in files_under(&crate_dir().join("src")) {
+        let text = fs::read_to_string(&file).unwrap();
+        assert!(!text.contains("cfg(feature"), "{}", file.display());
+        assert!(!text.to_lowercase().contains("mock"), "{}", file.display());
+    }
+    for file in files_under(&crate_dir().join("..").join("ui")) {
+        if let Ok(text) = fs::read_to_string(&file) {
+            for bad in ["__harness", "mock-tauri", "ui-harness"] {
+                assert!(!text.contains(bad), "{} names {bad}", file.display());
+            }
+        }
+    }
+}
+
 #[test]
 fn the_page_loads_nothing_remote_and_runs_no_inline_code() {
     let ui = crate_dir().join("..").join("ui");

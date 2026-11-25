@@ -108,4 +108,6 @@ function ico(sizes) {
 mkdirSync(out, { recursive: true });
 writeFileSync(join(out, "icon.ico"), ico([16, 24, 32, 48, 64, 256]));
 writeFileSync(join(out, "icon.png"), png(512));
-console.log(`wrote ${out}`);
+// The window's header shows a small copy.
+writeFileSync(join(out, "..", "..", "ui", "icon.png"), png(64));
+console.log(`wrote ${out} and ui/icon.png`);

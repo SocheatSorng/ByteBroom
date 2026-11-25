@@ -8,9 +8,94 @@
     <script src="app.js" defer></script>
   </head>
   <body>
-    <main id="app">
-      <h1>ByteBroom</h1>
-      <p id="status" role="status">Ready.</p>
+    <header class="bar">
+      <div class="brand">
+        <img src="icon.png" alt="" width="28" height="28" />
+        <h1>ByteBroom</h1>
+      </div>
+      <div class="bar-actions">
+        <button id="scan" class="primary" type="button">Scan</button>
+        <button id="cancel" type="button" hidden>Stop scan</button>
+      </div>
+    </header>
+
+    <p id="status" class="status" role="status" aria-live="polite">
+      Press Scan to see what can be cleaned. Nothing is changed until you preview and confirm.
+    </p>
+    <div id="progress" class="progress" hidden>
+      <div class="progress-bar" aria-hidden="true"></div>
+    </div>
+
+    <main id="main" hidden>
+      <section class="toolbar" aria-label="Choices">
+        <div class="chosen">
+          <span id="chosen-count">0 items chosen</span>
+          <strong id="chosen-size">0 B</strong>
+        </div>
+        <label class="filter">
+          <span>Filter</span>
+          <input id="filter" type="search" placeholder="Part of a name or folder" />
+        </label>
+        <div class="move-to">
+          <span id="move-to-label">Moves go to: no folder chosen</span>
+          <button id="pick-dest" type="button">Choose folder…</button>
+        </div>
+        <button id="preview" class="primary" type="button" disabled>Preview…</button>
+      </section>
+
+      <div class="columns">
+        <div class="lists">
+          <section aria-labelledby="green-h" class="tier tier-green">
+            <h2 id="green-h">
+              Green <span class="tier-hint">Windows or the app rebuilds these. Ticked for you.</span>
+            </h2>
+            <div id="green-list"></div>
+          </section>
+          <section aria-labelledby="amber-h" class="tier tier-amber">
+            <h2 id="amber-h">
+              Amber <span class="tier-hint">Your own files. Never ticked for you.</span>
+            </h2>
+            <div id="amber-list"></div>
+          </section>
+          <section aria-labelledby="red-h" class="tier tier-red">
+            <h2 id="red-h">
+              Red <span class="tier-hint">Windows' own areas: sizes only.</span>
+            </h2>
+            <p class="note">These are freed in a later version, through Windows' own tools.</p>
+            <ul id="red-list" class="red-list"></ul>
+          </section>
+        </div>
+        <aside class="side" aria-labelledby="largest-h">
+          <h2 id="largest-h">Largest items</h2>
+          <ol id="largest" class="largest"></ol>
+          <div id="unscanned-box" hidden>
+            <h2>Not scanned</h2>
+            <ul id="unscanned" class="unscanned"></ul>
+          </div>
+        </aside>
+      </div>
     </main>
+
+    <dialog id="preview-dialog" aria-labelledby="preview-h">
+      <form method="dialog" class="dialog-body">
+        <h2 id="preview-h">Preview: what will happen</h2>
+        <div id="preview-content"></div>
+        <div class="dialog-actions">
+          <button value="cancel" type="submit">Back</button>
+          <button id="confirm-clean" class="danger" type="button" disabled>Clean now</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="result-dialog" aria-labelledby="result-h">
+      <form method="dialog" class="dialog-body">
+        <h2 id="result-h">Done</h2>
+        <div id="result-content"></div>
+        <div class="dialog-actions">
+          <button id="open-bin" type="button" hidden>Open Recycle Bin</button>
+          <button id="scan-again" class="primary" type="submit" value="scan">Scan again</button>
+        </div>
+      </form>
+    </dialog>
   </body>
 </html>
