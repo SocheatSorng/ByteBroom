@@ -29,6 +29,71 @@ fast-forward to `main` first.
      dialog, and expect "nothing cleaned"; then repeat with "Clean them" and expect it recycled.
      Claude reads the log line and the Recycle Bin read-only.
    Close the item in `docs/spec.md` only after that check passes.
+
+   **Task 0 results (2026-11-25, branch `claude/phase-6-esc-dialog-efd777`): Esc cancels. The
+   dialog the owner closed with Esc was not the clean's Windows dialog.**
+   - **Evidence, from `bytebroom.log`** (read-only; it holds counts and answers, no file names).
+     The phase 5 clean of the two test files is the line at 23:22 (+0700):
+     `amber-confirm items=2 parent=main window answer=Confirm open_ms=5851 Clean`. Windows'
+     dialog was shown once for that clean, over the main window, and answered with
+     **Clean them** after 5.9 s. No line between 22:02 and 23:22 shows another answer to it. The
+     log also shows the cancel path working in the real build: 18:06,
+     `items=1 ... answer=Cancel open_ms=4615 Cancelled`.
+   - **Why Esc can't confirm.** The dialog is Windows' task dialog
+     (`crates/core/src/win/taskdialog.rs`): Cancel is the default button, and Esc, Cancel, Alt+F4
+     and the close box all end it with `IDCANCEL` (Microsoft's documentation). Only the
+     "Clean them" button's ID (`ID_CONFIRM`) counts as Confirm. A press under a second, no main
+     window, or a dialog Windows can't show also stop the clean. While it is open, the dialog
+     disables the main window it belongs to, so a key can't reach the page behind it.
+   - **The phase 3 story is different.** Phase 3 used the dialog plugin (`rfd`), whose default
+     button confirmed and which had no parent window. Phase 4 (security review S1) replaced it with
+     the task dialog above. Phase 5 is the first owner check with the new dialog, and the log
+     shows it working.
+   - **Which dialog took the Esc** can't be told from the log; none of the others clean
+     anything. Candidates: the page's Preview dialog (Esc means "Back", nothing is cleaned, and
+     the owner previews again), the "Move to which folder?" folder picker (Esc picks nothing),
+     or a History question (Esc answers no).
+   - **What changed in code.** No root-cause bug was found. The gate in `clean` is now its own
+     function, `amber_refusal` (`src-tauri/src/lib.rs`), so a test drives it directly:
+     `only_clean_them_lets_an_amber_move_or_recycle_through`. It runs an amber **recycle** and an
+     amber **move** through every outcome (Clean them read, Esc, Cancel, close box, button 0, a
+     press under a second, dialog unavailable, no window) and checks that the dialog is shown
+     once and that only "Clean them", read, goes ahead. The boundary test now pins that `clean`
+     goes through this gate before `carry_out`. The log line and the parent window were already
+     in place (phase 4, S1): the answer is `Confirm`/`Cancel`, the verdict is `Clean`/`Cancelled`
+     (or `TooFast`, `NoWindow`, `Unavailable`), and there are no file names.
+
+   **Owner's check for task 0** (on your PC, with one test file you make for it and nothing
+   else). Claude only reads the log and the Recycle Bin afterwards.
+   1. In your project folder, on the branch Claude names, run `./check.ps1` (expected:
+      `All checks passed.`), then `./build.ps1` (expected: `Built: ...\target\release\bytebroom.exe`).
+   2. Make one 600 MB test file in a new `bytebroom-esc-test` folder in Downloads. ByteBroom lists
+      files of 500 MB or more as "Large files", an amber category:
+      ```powershell
+      $t = Join-Path $env:USERPROFILE 'Downloads\bytebroom-esc-test'; New-Item -ItemType Directory -Force $t | Out-Null; $f = [IO.File]::Create((Join-Path $t 'esc-test.bin')); $f.SetLength(600MB); $f.WriteByte(7); $f.Close(); Get-ChildItem $t
+      ```
+   3. Start `target\release\bytebroom.exe` and press **Scan**. When it is done, untick everything,
+      then under "Large files" tick only `esc-test.bin` and leave its action **Recycle Bin**.
+   4. Press **Preview…**, tick the confirm that lists the file, and press **Clean now**. Windows'
+      dialog "ByteBroom: clean your own files?" opens, with a warning icon, the buttons
+      **Clean them** and **Cancel**, and the path of the file in its text.
+      Wait 2 seconds, then press **Esc** once.
+      Expected: the dialog closes, the status line says "cancelled: nothing was cleaned. Preview
+      again to choose.", and `esc-test.bin` is still in `Downloads\bytebroom-esc-test`.
+   5. Press **Preview…** again, tick the confirm, and press **Clean now**. In Windows' dialog wait
+      2 seconds, then press **Clean them**.
+      Expected: the result screen says "Recycle Bin: 1 item done", `esc-test.bin` is gone from the
+      folder, and Windows' Recycle Bin lists it.
+   6. Tell Claude whether 4 and 5 held (yes/no, and what differed). Claude then reads, read-only:
+      - the last two lines of `%LOCALAPPDATA%\ByteBroom\bytebroom.log`. Expected: first
+        `amber-confirm items=1 parent=main window answer=Cancel ... Cancelled`, then
+        `amber-confirm items=1 parent=main window answer=Confirm ... Clean`;
+      - the Recycle Bin, which should list `esc-test.bin`.
+   7. Tidy up: in Explorer, delete `esc-test.bin` from the Recycle Bin and delete the
+      `bytebroom-esc-test` folder.
+
+   If step 4 cleans anything, stop: that is a safety bug, and Claude fixes it with a test before
+   anything else in this phase.
 3. `main` is 79 commits ahead of `origin/main`. **Nothing is pushed until the owner asks**, and
    only after the publishing checklist (task 7).
 

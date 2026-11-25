@@ -154,16 +154,18 @@ async fn clean(
     let (ready, guard) = session
         .take_preview(preview_id)
         .map_err(|e| CommandError::new(&e))?;
-    if let Some(question) = amber_question(&ready) {
-        let items = ready.preview.confirm_amber.len();
+    if !ready.preview.confirm_amber.is_empty() {
         let base = local_app_data(&layout.0);
+        let asking = ready.clone();
         // The dialog blocks until answered, so it runs off the async runtime.
-        let verdict = tauri::async_runtime::spawn_blocking(move || {
-            confirm::ask(&app, &question, items, base.as_ref())
+        let stop = tauri::async_runtime::spawn_blocking(move || {
+            amber_refusal(&asking, |question, items| {
+                confirm::ask(&app, question, items, base.as_ref())
+            })
         })
         .await
-        .unwrap_or(confirm::Verdict::Unavailable);
-        if let Some(why) = confirm::refusal(verdict) {
+        .unwrap_or_else(|_| confirm::refusal(confirm::Verdict::Unavailable));
+        if let Some(why) = stop {
             guard.nothing_done();
             return Err(CommandError::new(why));
         }
@@ -197,6 +199,18 @@ async fn clean(
     .map_err(|_| {
         CommandError::new("the clean stopped unexpectedly; scan again to see what is left")
     })?
+}
+
+/// Why a clean must not go ahead, or `None` when it may: a preview with amber items (any action:
+/// move, recycle or delete) goes ahead only if `ask` (Windows' dialog, in `clean`) returns
+/// [`confirm::Verdict::Clean`]; every other verdict stops it. A preview with no amber item
+/// asks nothing. `ask` gets the question and the number of amber items.
+pub fn amber_refusal(
+    ready: &session::Ready,
+    ask: impl FnOnce(&str, usize) -> confirm::Verdict,
+) -> Option<&'static str> {
+    let question = amber_question(ready)?;
+    confirm::refusal(ask(&question, ready.preview.confirm_amber.len()))
 }
 
 /// The question Rust asks in its own dialog before a clean that touches amber items, or `None`
@@ -526,6 +540,122 @@ mod tests {
             "{q}"
         );
         assert!(!q.contains("a.tmp"), "only amber items are listed: {q}");
+    }
+
+    /// Phase 6 task 0 (phase 3's open item): Windows' dialog stands between the preview and
+    /// acting for every amber item, whatever its action, and every outcome but "Clean them",
+    /// pressed after reading, stops the clean: Cancel, Esc, the close box, a stray fast press,
+    /// no main window, or a dialog Windows can't show.
+    #[test]
+    fn only_clean_them_lets_an_amber_move_or_recycle_through() {
+        use bytebroom_core::preview::{Action, Choice, preview};
+        use bytebroom_core::rules::RULES;
+        use bytebroom_core::win::taskdialog::{Answer, Asked, ID_CANCEL, ID_CONFIRM, answer_for};
+        use confirm::Verdict;
+        use std::cell::Cell;
+        use std::time::Duration;
+
+        let p = |s: &str| WinPath::parse(s).unwrap();
+        let f = |rule: &str, path: &str| {
+            let rule = RULES.iter().find(|r| r.id == rule).unwrap();
+            let path = p(path);
+            bytebroom_core::scan::Finding {
+                rule,
+                tier: rule.tier,
+                root: p(path.to_string().rsplit_once('\\').unwrap().0),
+                path,
+                is_folder: false,
+                bytes: 600 * 1024 * 1024,
+                files: 1,
+                newest: std::time::UNIX_EPOCH,
+                cloud: false,
+                pre_ticked: rule.pre_ticked(),
+                duplicate_of: None,
+                identity: None,
+            }
+        };
+        let findings = Arc::new(vec![
+            f("user-temp", "C:\\T\\a.tmp"),
+            f("large-files", "D:\\Big\\test.bin"),
+        ]);
+        let layout = SystemLayout {
+            system_root: p("C:\\Windows"),
+            program_files: vec![p("C:\\Program Files")],
+            program_data: p("C:\\ProgramData"),
+            profiles_dir: p("C:\\Users"),
+            profile_roots: vec![p("C:\\Users\\Ann")],
+            extra_denied: Vec::new(),
+        };
+        let move_to = p("E:\\Moved");
+        let ready = |index: usize, action: Action| session::Ready {
+            id: PreviewId { scan: 1, number: 1 },
+            preview: Arc::new(
+                preview(
+                    &findings,
+                    &[Choice { index, action }],
+                    Some(&move_to),
+                    &layout,
+                )
+                .unwrap(),
+            ),
+            findings: findings.clone(),
+        };
+
+        // A green-only clean has no amber question: the dialog is not shown.
+        assert_eq!(
+            amber_refusal(&ready(0, Action::Recycle), |_, _| panic!("not asked")),
+            None
+        );
+
+        let read = Duration::from_secs(3);
+        // What Windows hands back for each thing the owner can do. Esc, the Cancel button, the
+        // close box and Alt+F4 all end TaskDialogIndirect with IDCANCEL (Microsoft's docs).
+        let outcomes = [
+            ("Clean them, read", answer_for(ID_CONFIRM), read, true),
+            ("Esc", answer_for(ID_CANCEL), read, false),
+            ("Cancel", answer_for(ID_CANCEL), read, false),
+            ("close box", answer_for(ID_CANCEL), read, false),
+            ("no button (0)", answer_for(0), read, false),
+            (
+                "Clean them, under a second",
+                answer_for(ID_CONFIRM),
+                Duration::from_millis(300),
+                false,
+            ),
+            (
+                "dialog unavailable",
+                Answer::Unavailable,
+                Duration::ZERO,
+                false,
+            ),
+        ];
+        for action in [Action::Recycle, Action::Move] {
+            let amber = ready(1, action);
+            for (what, answer, open_for, goes) in outcomes {
+                let shown = Cell::new(0);
+                let stop = amber_refusal(&amber, |question, items| {
+                    shown.set(shown.get() + 1);
+                    assert!(question.contains("D:\\Big\\test.bin"), "{question}");
+                    assert_eq!(items, 1);
+                    confirm::verdict(&Asked { answer, open_for })
+                });
+                assert_eq!(
+                    shown.get(),
+                    1,
+                    "{action:?}, {what}: the dialog is shown once"
+                );
+                assert_eq!(stop.is_none(), goes, "{action:?}, {what}: {stop:?}");
+                if let Some(why) = stop {
+                    assert!(
+                        why.contains("nothing was cleaned"),
+                        "{action:?}, {what}: {why}"
+                    );
+                }
+            }
+            // No main window to show the dialog over: not shown, not cleaned.
+            let stop = amber_refusal(&amber, |_, _| Verdict::NoWindow);
+            assert!(stop.is_some(), "{action:?}, no window");
+        }
     }
 
     #[test]
