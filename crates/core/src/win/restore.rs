@@ -15,7 +15,7 @@
 //! Only the elevated helper calls [`make_restore_point`]; tests never do (it would make a real
 //! restore point). COM security can be set once per process, which suits the one-shot helper.
 
-use crate::restore::{RestorePoint, from_call};
+use crate::restore::{CONFIRM_PAUSE, CONFIRM_TRIES, RestorePoint, confirm_listed, from_call};
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use windows_sys::Win32::Foundation::FreeLibrary;
@@ -250,6 +250,78 @@ fn with_com(description: &str) -> RestorePoint {
         if !ended {
             return RestorePoint::Failed(end_status.nStatus);
         }
+        // Success from Windows isn't enough: the shadow copy behind the point is taken after
+        // the call returns, and fails if this process has exited (owner's check, 2026-11-25:
+        // VSS 8193 in DoSnapshotSet, no point left). Stay running until Windows lists it.
+        return confirm_listed(
+            sequence,
+            is_listed,
+            || std::thread::sleep(CONFIRM_PAUSE),
+            CONFIRM_TRIES,
+        );
     }
     point
+}
+
+/// Whether WMI's `root\default:SystemRestore` (the list `rstrui` shows) has a restore point
+/// with this sequence number. `None` if the question itself failed. Uses COM as set up above.
+pub fn is_listed(sequence: i64) -> Option<bool> {
+    use windows::Win32::System::Com::{
+        CLSCTX_INPROC_SERVER, CoCreateInstance, CoSetProxyBlanket, EOAC_NONE,
+        RPC_C_AUTHN_LEVEL_PKT_PRIVACY, RPC_C_IMP_LEVEL_IMPERSONATE,
+    };
+    use windows::Win32::System::Rpc::{RPC_C_AUTHN_WINNT, RPC_C_AUTHZ_NONE};
+    use windows::Win32::System::Wmi::{
+        IWbemClassObject, IWbemLocator, WBEM_FLAG_FORWARD_ONLY, WBEM_FLAG_RETURN_IMMEDIATELY,
+        WBEM_INFINITE, WbemLocator,
+    };
+    use windows::core::{BSTR, PCWSTR};
+
+    // SAFETY: plain COM calls on interfaces this function owns; every out value is checked.
+    unsafe {
+        let locator: IWbemLocator =
+            CoCreateInstance(&WbemLocator, None, CLSCTX_INPROC_SERVER).ok()?;
+        let services = locator
+            .ConnectServer(
+                &BSTR::from(r"ROOT\DEFAULT"),
+                &BSTR::new(),
+                &BSTR::new(),
+                &BSTR::new(),
+                0,
+                &BSTR::new(),
+                None,
+            )
+            .ok()?;
+        // The process-wide setting is identify-level (Microsoft's sample, for callbacks); WMI
+        // needs impersonation for this one connection only.
+        CoSetProxyBlanket(
+            &services,
+            RPC_C_AUTHN_WINNT,
+            RPC_C_AUTHZ_NONE,
+            PCWSTR::null(),
+            RPC_C_AUTHN_LEVEL_PKT_PRIVACY,
+            RPC_C_IMP_LEVEL_IMPERSONATE,
+            None,
+            EOAC_NONE,
+        )
+        .ok()?;
+        // `sequence` is a number, so the query can't carry anything else.
+        let query =
+            format!("SELECT SequenceNumber FROM SystemRestore WHERE SequenceNumber = {sequence}");
+        let rows = services
+            .ExecQuery(
+                &BSTR::from("WQL"),
+                &BSTR::from(query),
+                WBEM_FLAG_FORWARD_ONLY | WBEM_FLAG_RETURN_IMMEDIATELY,
+                None,
+            )
+            .ok()?;
+        let mut row: [Option<IWbemClassObject>; 1] = [None];
+        let mut returned = 0u32;
+        let hr = rows.Next(WBEM_INFINITE, &mut row, &mut returned);
+        if hr.is_err() {
+            return None;
+        }
+        Some(returned == 1 && row[0].is_some())
+    }
 }

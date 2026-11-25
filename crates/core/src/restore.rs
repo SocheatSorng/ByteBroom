@@ -35,6 +35,37 @@ pub enum RestorePoint {
     Failed(u32),
 }
 
+/// How many times the helper asks Windows to list a point it just made, and the pause between.
+/// Three minutes in all: the snapshot behind the point is taken after the call returns.
+pub const CONFIRM_TRIES: u32 = 90;
+/// See [`CONFIRM_TRIES`].
+pub const CONFIRM_PAUSE: std::time::Duration = std::time::Duration::from_secs(2);
+/// ByteBroom's own code in [`RestorePoint::Failed`]: Windows said the point was made, but it
+/// never appeared in the list of restore points.
+pub const NOT_LISTED: u32 = 0xB0B0_0001;
+
+/// Count a point as in place only once Windows lists it (the owner's check, 2026-11-25:
+/// `SRSetRestorePointW` reported success and System Restore logged the point, but the shadow
+/// copy behind it was taken after the helper exited, failed, and no point was left). `listed`
+/// asks Windows whether `sequence` is in the list (`None`: the question failed); `pause` waits
+/// between tries. The helper stays running meanwhile. Pure.
+pub fn confirm_listed(
+    sequence: i64,
+    mut listed: impl FnMut(i64) -> Option<bool>,
+    mut pause: impl FnMut(),
+    tries: u32,
+) -> RestorePoint {
+    for attempt in 0..tries {
+        if attempt > 0 {
+            pause();
+        }
+        if listed(sequence) == Some(true) {
+            return RestorePoint::InPlace(sequence);
+        }
+    }
+    RestorePoint::Failed(NOT_LISTED)
+}
+
 const ERROR_BAD_ENVIRONMENT: u32 = 10;
 const ERROR_DISK_FULL: u32 = 112;
 const ERROR_SERVICE_DISABLED: u32 = 1058;
@@ -163,6 +194,46 @@ mod tests {
         );
         assert!(ran.get());
         assert_eq!(exit, Exit::Failed, "the action's own answer comes back");
+    }
+
+    #[test]
+    fn a_point_counts_only_once_windows_lists_it() {
+        // Listed on the third ask: in place, after two pauses.
+        let (asks, pauses) = (Cell::new(0), Cell::new(0));
+        let point = confirm_listed(
+            42,
+            |seq| {
+                assert_eq!(seq, 42);
+                asks.set(asks.get() + 1);
+                Some(asks.get() == 3)
+            },
+            || pauses.set(pauses.get() + 1),
+            CONFIRM_TRIES,
+        );
+        assert_eq!(point, RestorePoint::InPlace(42));
+        assert_eq!((asks.get(), pauses.get()), (3, 2));
+
+        // Never listed, or the question keeps failing: not in place, after every try.
+        for answer in [Some(false), None] {
+            let asks = Cell::new(0);
+            let point = confirm_listed(
+                42,
+                |_| {
+                    asks.set(asks.get() + 1);
+                    answer
+                },
+                || {},
+                5,
+            );
+            assert_eq!(point, RestorePoint::Failed(NOT_LISTED), "{answer:?}");
+            assert_eq!(asks.get(), 5);
+            assert_eq!(exit_for(point), Exit::RestoreFailed);
+        }
+        // Three minutes in all.
+        assert_eq!(
+            CONFIRM_PAUSE * (CONFIRM_TRIES - 1),
+            std::time::Duration::from_secs(178)
+        );
     }
 
     #[test]

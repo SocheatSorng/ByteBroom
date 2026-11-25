@@ -359,6 +359,26 @@ Each task: code → tests → fmt + clippy → full tests → build → commit w
         `HKCU\Environment` never reach the elevated process;
       - a separate test program plants such variables and checks only the fixed list is left.
     - **Note 1:** SID buffers are explicitly 4-byte aligned.
+  - **Owner's check (2026-11-25): fail-open found and fixed.**
+    - **Found:** five runs answered `Done`, and System Restore logged "Successfully created
+      restore point" for the helper each time, but `rstrui` listed none. About 4 seconds after
+      each run, VSS logged error 8193 in `DoSnapshotSet` (`QueryFullProcessImageNameW`, "The
+      handle is invalid"). The shadow copy behind the point is taken after
+      `SRSetRestorePointW` returns, and it failed because the helper had already exited. The
+      System Properties window stays open, and its point (19:23) was kept.
+    - **Why it matters:** the helper said a restore point was in place when none was, so an
+      action could have run unprotected.
+    - **Fix:**
+      - after `END_SYSTEM_CHANGE`, the helper stays running and asks WMI
+        (`root\default:SystemRestore`, the list `rstrui` shows) for that sequence number, every
+        2 seconds for up to 3 minutes (`confirm_listed`, tested);
+      - only a listed point counts as in place; otherwise `RestoreFailed`
+        (`NOT_LISTED`), and nothing runs;
+      - this also checks the 24-hour reuse: the reused number must be in the list too.
+    - **New dependency:** the `windows` crate (=0.62.2, the version Tauri already brings in),
+      for WMI's COM interfaces only.
+    - Also seen: volsnap event 36 at 16:20, when C: was full. Windows dropped every earlier
+      restore point then, which is why `rstrui` showed none at all.
   - **Notes kept:**
     - **No cancel when END fails:** cancelling (`CANCELLED_OPERATION`) could remove an
       earlier, complete restore point when Windows reused one. Nothing runs either way.
@@ -469,7 +489,9 @@ The helper changed, so it is installed again. In your project folder:
    `cargo run --release -p bytebroom-admin --example elevate_restore_point`.
    - On the UAC prompt, **Show more details** must read
      `"C:\Program Files\ByteBroom\bytebroom-admin.exe" restore-point`.
-   - Click **Yes**. Expected: `Answer: Done (done)`. It can take a minute.
+   - Click **Yes**. Expected: `Answer: Done (done)`. It can take up to 3 minutes: the helper
+     waits until Windows lists the point. `Answer: RestoreFailed` means Windows never listed
+     it; nothing was changed.
 4. Look at the result, read-only: press Win+R, type `rstrui`, press Enter, and choose
    "Choose a different restore point" if asked.
    - Either a new point named "ByteBroom: restore point on request" is at the top,

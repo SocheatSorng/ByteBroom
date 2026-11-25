@@ -254,6 +254,7 @@ name = "bytebroom-core"
 version = "0.3.0"
 dependencies = [
  "proptest",
+ "windows",
  "windows-sys 0.61.2",
 ]
 
