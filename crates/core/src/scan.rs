@@ -18,8 +18,9 @@ use crate::locations::Locations;
 use crate::paths::WinPath;
 use crate::policy::{SystemLayout, denied_reason};
 use crate::rules::{
-    BUILD_FOLDER_NAMES, Base, DUPLICATE_HEAD_BYTES, DUPLICATE_MIN_BYTES, Find, LARGE_FILE_BYTES,
-    Look, OLD_INSTALLER_DAYS, Place, RULES, Rule, Tier, base_folder, name_matches,
+    BUILD_FOLDER_NAMES, Base, BuildFolder, DUPLICATE_HEAD_BYTES, DUPLICATE_MIN_BYTES, Find,
+    LARGE_FILE_BYTES, Look, OLD_INSTALLER_DAYS, Place, RULES, Rule, Tier, base_folder,
+    name_matches,
 };
 use crate::walk::{Item, Step, WalkOptions, WalkSummary};
 use crate::win::hash::Sha256;
@@ -385,7 +386,7 @@ impl Scanner<'_> {
         }
     }
 
-    fn build_folders(&mut self, rule: &'static Rule, areas: &[Base], names: &[&str]) {
+    fn build_folders(&mut self, rule: &'static Rule, areas: &[Base], kinds: &[BuildFolder]) {
         for area in self.area_roots(areas) {
             let Some(area) = self.search_root(&area) else {
                 continue;
@@ -402,9 +403,10 @@ impl Scanner<'_> {
                 if name.eq_ignore_ascii_case(".git") {
                     return Step::Skip; // nothing to find inside, and often large
                 }
-                if names.iter().any(|n| n.eq_ignore_ascii_case(name))
+                if let Some(kind) = kinds.iter().find(|k| k.name.eq_ignore_ascii_case(name))
                     && let Some(project) = parent(path)
                     && has_git(&project, layout)
+                    && has_marker(&project, kind.markers)
                 {
                     hits.push(((*path).clone(), project, *modified));
                     return Step::Skip;
@@ -599,6 +601,15 @@ fn has_git(project: &WinPath, layout: &SystemLayout) -> bool {
     project.join(".git").is_ok_and(|git| {
         denied_reason(&git, layout).is_none()
             && open_no_follow(&git, Access::Inspect).is_ok_and(|o| !o.resolved.is_reparse_point)
+    })
+}
+
+/// `project` directly holds a file matching one of `markers` (e.g. `package.json`, `*.csproj`).
+fn has_marker(project: &WinPath, markers: &[&str]) -> bool {
+    crate::win::list_children(project).is_ok_and(|names| {
+        names
+            .iter()
+            .any(|n| markers.iter().any(|m| name_matches(m, n)))
     })
 }
 

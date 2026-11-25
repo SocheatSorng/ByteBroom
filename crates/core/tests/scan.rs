@@ -196,6 +196,27 @@ impl Profile {
             1,
         ); // decoy: no .git beside
         old(&code.join("notproj").join("node_modules").join("x.js"), 1); // decoy: no .git
+        // Project markers: node_modules needs package.json, target needs Cargo.toml.
+        old(&code.join("proj").join("package.json"), 1);
+        old(&code.join("proj").join("Cargo.toml"), 1);
+        // Security review S2. A Rails repo: bin holds tracked scripts, not build output.
+        old(&code.join("rails").join(".git").join("HEAD"), 1);
+        old(&code.join("rails").join("Gemfile"), 1);
+        old(&code.join("rails").join("bin").join("rails"), 1);
+        // A .NET repo: bin is build output.
+        old(&code.join("dotnet").join(".git").join("HEAD"), 1);
+        old(&code.join("dotnet").join("App.csproj"), 1);
+        old(
+            &code
+                .join("dotnet")
+                .join("bin")
+                .join("Debug")
+                .join("App.dll"),
+            500,
+        );
+        // A repo with a committed dist and no package.json.
+        old(&code.join("site").join(".git").join("HEAD"), 1);
+        old(&code.join("site").join("dist").join("index.html"), 1);
         old(&home.join(".ssh").join("id_rsa"), 1); // never listed
 
         Self { dir, home }
@@ -316,6 +337,7 @@ fn every_category_is_found_and_no_decoy_is() {
         ("old-installers", "Downloads\\sub\\old.MSI".to_string()),
         ("build-folders", "code\\proj\\node_modules".to_string()),
         ("build-folders", "code\\proj\\target".to_string()),
+        ("build-folders", "code\\dotnet\\bin".to_string()),
     ]
     .into_iter()
     .map(|(a, b)| (a.to_string(), b))

@@ -63,8 +63,19 @@ pub enum Find {
     Duplicates,
     /// Files with these extensions older than [`OLD_INSTALLER_DAYS`].
     OldInstallers(&'static [&'static str]),
-    /// Folders with these names inside a folder that also holds `.git`.
-    BuildFolders(&'static [&'static str]),
+    /// Build-output folders inside a code project: the folder that holds them must also hold
+    /// `.git` and one of the folder's own project markers.
+    BuildFolders(&'static [BuildFolder]),
+}
+
+/// A build-output folder name and the project files that must sit beside it. Without a marker,
+/// a folder like `bin` or `dist` may be tracked source (a Rails `bin`, a committed `dist`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BuildFolder {
+    /// The folder's name, matched ignoring ASCII case.
+    pub name: &'static str,
+    /// File name patterns (`*` = any text); one must be in the same folder.
+    pub markers: &'static [&'static str],
 }
 
 /// A red-tier item: reported by size, never acted on in phase 2.
@@ -146,6 +157,32 @@ pub const DUPLICATE_MIN_BYTES: u64 = 1024 * 1024;
 pub const DUPLICATE_HEAD_BYTES: usize = 64 * 1024;
 /// Folder names that hold build output in code projects.
 pub const BUILD_FOLDER_NAMES: [&str; 5] = ["node_modules", "target", "bin", "obj", "dist"];
+
+const DOTNET_PROJECTS: &[&str] = &["*.csproj", "*.fsproj", "*.vbproj"];
+
+/// The build-output folders the "Build folders in code projects" rule offers, with their markers.
+pub const BUILD_FOLDERS: [BuildFolder; 5] = [
+    BuildFolder {
+        name: "node_modules",
+        markers: &["package.json"],
+    },
+    BuildFolder {
+        name: "target",
+        markers: &["Cargo.toml", "pom.xml"],
+    },
+    BuildFolder {
+        name: "bin",
+        markers: DOTNET_PROJECTS,
+    },
+    BuildFolder {
+        name: "obj",
+        markers: DOTNET_PROJECTS,
+    },
+    BuildFolder {
+        name: "dist",
+        markers: &["package.json"],
+    },
+];
 
 /// Folders that are never listed, wherever they are (matched ignoring ASCII case).
 pub const NEVER_LISTED_FOLDERS: [&str; 2] = [".ssh", ".gnupg"];
@@ -384,7 +421,7 @@ pub static RULES: [Rule; 19] = [
         tier: Tier::Amber,
         look: Look::Search {
             areas: &[Base::Profile, Base::OtherDrives],
-            find: Find::BuildFolders(&BUILD_FOLDER_NAMES),
+            find: Find::BuildFolders(&BUILD_FOLDERS),
         },
         fresh_hours: 0,
     },
@@ -692,6 +729,18 @@ mod tests {
                 0
             };
             assert_eq!(rule.fresh_hours, expected, "{}", rule.id);
+        }
+    }
+
+    #[test]
+    fn every_build_folder_has_markers_and_the_names_agree() {
+        let names: Vec<&str> = BUILD_FOLDERS.iter().map(|b| b.name).collect();
+        assert_eq!(names, BUILD_FOLDER_NAMES.to_vec());
+        for b in BUILD_FOLDERS {
+            assert!(!b.markers.is_empty(), "{}", b.name);
+            for m in b.markers {
+                assert!(!is_never_listed(&m.replace('*', "x")), "{m}");
+            }
         }
     }
 
