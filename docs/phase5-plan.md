@@ -1,6 +1,7 @@
 # Phase 5 plan: undo and history
 
-Status: **draft, 2026-11-25.** The owner answers the decisions below before any code is written.
+Status: **decided, 2026-11-25.** The owner chose the recommended option for all six decisions
+(see "Owner's decisions" below). Code starts once phase 4 is merged.
 Branch: `phase-5-undo-history`, cut from `main` after phase 4 is merged.
 
 ## What this phase proves (from `docs/spec.md`)
@@ -86,6 +87,18 @@ Branch: `phase-5-undo-history`, cut from `main` after phase 4 is merged.
 6. **Undo many at once:**
    - (a) **one clean's moves as a group, plus single items (recommended);**
    - (b) single items only.
+
+## Owner's decisions (2026-11-25)
+
+1. **(a) Moves only** can be undone. Recycled items are restored with Windows' own Restore.
+2. **(a) Yes:** ByteBroom keeps `ByteBroom\recycled.journal` in local app data. It is never
+   committed or sent, and can be cleared from the window.
+3. **(a) "Open the Recycle Bin" only:** ByteBroom never writes into `$Recycle.Bin`. Task 0's
+   check of the shell's restore verb is not needed.
+4. **(a) The page's own confirm only** before "Put back". There is no native dialog.
+5. **(a) History is kept until the owner clears it** with "Clear history". Clearing never
+   touches the files.
+6. **(a) One clean's moves can be put back as a group,** or as single items.
 
 ## Tasks (riskiest first)
 
