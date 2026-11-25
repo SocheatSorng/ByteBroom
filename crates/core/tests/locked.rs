@@ -244,7 +244,8 @@ fn only_the_move_and_history_modules_and_the_window_read_the_journals() {
                     "move_history",
                     "undo_entries",
                     "RecycledJournal",
-                    "RecycledRecord",
+                    "RecycledRecord::parse",
+                    ".records()",
                     "clear_history",
                 ]
                 .iter()
@@ -266,6 +267,7 @@ fn only_the_move_and_history_modules_and_the_window_read_the_journals() {
         vec![
             "crates/core/src/history.rs".to_string(),
             "crates/core/src/relocate.rs".to_string(),
+            "src-tauri/src/lib.rs".to_string(),
         ],
         "{readers:?}"
     );

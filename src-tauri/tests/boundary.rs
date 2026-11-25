@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 /// Every command the window may call. Adding one is a security decision: update this list, the
 /// capability file and `build.rs` together, and have the change reviewed.
-const COMMANDS: [&str; 9] = [
+const COMMANDS: [&str; 12] = [
     "start_scan",
     "cancel_scan",
     "scan_state",
@@ -19,14 +19,18 @@ const COMMANDS: [&str; 9] = [
     "open_recycle_bin",
     "red_actions",
     "run_red_action",
+    "history",
+    "put_back",
+    "clear_history",
 ];
 
 /// The only parameter types a command may take: IDs and fixed choices (see `boundary.rs`), or
 /// things Tauri itself provides (never sent by the page).
-const PARAM_TYPES: [&str; 6] = [
+const PARAM_TYPES: [&str; 7] = [
     "Vec<Choice>",
     "PreviewId",
     "boundary::RedActionId",
+    "boundary::PutBackId",
     "u32",
     "AppHandle",
     "State<",

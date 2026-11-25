@@ -16,6 +16,7 @@
       <div class="bar-actions">
         <button id="scan" class="primary" type="button">Scan</button>
         <button id="cancel" type="button" hidden>Stop scan</button>
+        <button id="open-history" type="button">History…</button>
       </div>
     </header>
 
@@ -101,6 +102,33 @@
         <div class="dialog-actions">
           <button id="open-bin" type="button" hidden>Open Recycle Bin</button>
           <button id="scan-again" class="primary" type="submit" value="scan">Scan again</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="history-dialog" aria-labelledby="history-h">
+      <form method="dialog" class="dialog-body">
+        <h2 id="history-h" tabindex="-1" autofocus>History</h2>
+        <p class="note">
+          What ByteBroom moved and sent to the Recycle Bin. Moved files can be put back; recycled
+          items are restored from Windows' own Recycle Bin. Deleted items are gone for good.
+        </p>
+        <p id="history-result" class="history-result" hidden></p>
+        <div id="history-content"></div>
+        <div class="dialog-actions">
+          <button id="clear-history" class="danger" type="button">Clear history…</button>
+          <button value="close" class="primary" type="submit">Close</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="ask-dialog" aria-labelledby="ask-h">
+      <form method="dialog" class="dialog-body">
+        <h2 id="ask-h" tabindex="-1" autofocus>Are you sure?</h2>
+        <div id="ask-content"></div>
+        <div class="dialog-actions">
+          <button value="no" type="submit">Cancel</button>
+          <button id="ask-yes" value="yes" class="danger" type="submit">Yes</button>
         </div>
       </form>
     </dialog>

@@ -82,6 +82,30 @@ Where the space comes back:
 - **Recycle Bin:** not until you empty the bin. Each drive's Recycle Bin is on that same drive, so
   recycling frees nothing by itself; the result screen offers to open the bin.
 
+### History: putting moves back
+
+**History…** (top right) lists what ByteBroom moved, one clean at a time with the newest first,
+and what it sent to the Recycle Bin.
+
+- **Put back…** puts a moved file back where it was. **Put back all…** does the same for every
+  file of one clean that is still moved. The page asks first. Each file is copied back into its
+  original folder and checked against the SHA-256 recorded when it was moved; the moved copy is
+  removed only after the copy matches. Nothing already at the original place is ever replaced. If
+  the original folder is gone (a moved folder), it is made again, but only inside a place
+  ByteBroom scans. A file can't be put back directly into your profile folder or a drive root:
+  move those back by hand. Putting back never runs as administrator.
+- A file shows why it can't be put back now, for example when the drive it was moved to is not
+  plugged in. A file that was already put back says so, and a second try changes nothing.
+- **Recycled items** are listed with where they came from. ByteBroom never restores them itself:
+  **Open the Recycle Bin**, select them, and use Windows' own Restore.
+- **Deleted items** are gone for good and are not listed.
+- **Clear history…** forgets everything listed. The files stay exactly where they are, but moved
+  files can then no longer be put back from ByteBroom.
+
+The history lives in your local app data folder: `ByteBroom\moves.journal` (moves, and which were
+put back) and `ByteBroom\recycled.journal` (what was recycled). Both list your file names, so they
+are never committed, logged or sent anywhere; `bytebroom.log` keeps counts only.
+
 ## Install, run, test, build
 
 ByteBroom is written in Rust: the safety core and scanner in `crates/core`, the read-only scan tool

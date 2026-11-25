@@ -133,12 +133,184 @@ fn local_app_data(layout: &SystemLayout) -> Option<WinPath> {
     bytebroom_core::win::locations::locations(layout).local_app_data
 }
 
+/// ByteBroom's folder in the owner's local app data, held, reached without following links.
+fn app_dir(layout: &SystemLayout) -> Result<bytebroom_core::win::dir::LockedDir, String> {
+    let base = local_app_data(layout).ok_or("local app data can't be found")?;
+    bytebroom_core::relocate::app_folder(&base)
+}
+
 /// The move journal, `ByteBroom\moves.journal` in the owner's local app data, outside any repo.
 /// The folder and file are opened without following links (security review note 7).
-fn open_journal(layout: &SystemLayout) -> Result<bytebroom_core::relocate::Journal, String> {
-    let base = local_app_data(layout).ok_or("local app data can't be found")?;
-    let dir = bytebroom_core::relocate::app_folder(&base)?;
-    bytebroom_core::relocate::Journal::open(&dir, "moves.journal")
+fn open_journal(
+    dir: &bytebroom_core::win::dir::LockedDir,
+) -> Result<bytebroom_core::relocate::Journal, String> {
+    bytebroom_core::relocate::Journal::open(dir, bytebroom_core::history::HISTORY_FILES[0])
+}
+
+/// The history list the page was last given (phase 5). Its mutex is also the one lock every
+/// journal write and read takes, so a clean, a put-back and a clear never overlap.
+#[derive(Default)]
+pub struct History {
+    inner: std::sync::Mutex<HistoryList>,
+}
+
+/// The moves the last History view listed, by its numbering.
+#[derive(Default)]
+struct HistoryList {
+    list: u32,
+    groups: Vec<Vec<bytebroom_core::relocate::JournalEntry>>,
+}
+
+impl History {
+    fn lock(&self) -> std::sync::MutexGuard<'_, HistoryList> {
+        self.inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+/// Why a still-moved file can't be put back now, from a quick look that only reads. Putting
+/// back checks everything again.
+fn put_back_unavailable(entry: &bytebroom_core::relocate::JournalEntry) -> Option<&'static str> {
+    use bytebroom_core::win::{Access, OpenError, open_no_follow};
+    match open_no_follow(&entry.dest, Access::Inspect) {
+        Ok(o) if o.is_directory || o.resolved.is_reparse_point => {
+            return Some("the moved file is not a plain file any more");
+        }
+        Ok(_) => {}
+        Err(OpenError::NotFound) => {
+            return Some("the moved file isn't there (is its drive plugged in?)");
+        }
+        Err(_) => return Some("the moved file can't be opened"),
+    }
+    match open_no_follow(&entry.source, Access::Inspect) {
+        Err(OpenError::NotFound) => None,
+        _ => Some("something is already at the original place"),
+    }
+}
+
+/// Read both journals and number a new list. Must be called with the history lock held.
+fn read_history(
+    list: &mut HistoryList,
+    layout: &SystemLayout,
+) -> Result<view::HistoryView, String> {
+    use bytebroom_core::history::{RecycledJournal, group_by_clean, move_history};
+    let dir = app_dir(layout)?;
+    let journal = open_journal(&dir)?;
+    let lines = journal.lines().map_err(|e| e.to_string())?;
+    let groups = group_by_clean(&move_history(&lines));
+    let recycled = RecycledJournal::open(&dir)?
+        .records()
+        .map_err(|e| e.to_string())?;
+    list.list = list.list.wrapping_add(1);
+    list.groups = groups
+        .iter()
+        .map(|g| g.iter().map(|r| r.entry.clone()).collect())
+        .collect();
+    Ok(view::history_view(
+        list.list,
+        &groups,
+        &recycled,
+        &put_back_unavailable,
+    ))
+}
+
+/// What ByteBroom moved (by clean) and recycled. Only reads.
+#[tauri::command]
+async fn history(
+    history: State<'_, Arc<History>>,
+    layout: State<'_, Layout>,
+) -> Reply<view::HistoryView> {
+    let (history, layout) = (history.inner().clone(), layout.0.clone());
+    tauri::async_runtime::spawn_blocking(move || read_history(&mut history.lock(), &layout))
+        .await
+        .map_err(|_| CommandError::new("the history could not be read"))?
+        .map_err(|e| CommandError::new(&format!("the history could not be read: {e}")))
+}
+
+/// Put back one move, or every still-moved file of one clean. The page sends only the IDs of
+/// the list it was given; Rust re-reads the journal for every file (`undo_entries`), checks
+/// both ends on disk (`undo_move`) and stays unelevated (rule S3). The page's own confirm is
+/// the only question (decision 4): nothing is deleted until the restored file matches.
+#[tauri::command]
+async fn put_back(
+    history: State<'_, Arc<History>>,
+    layout: State<'_, Layout>,
+    which: boundary::PutBackId,
+) -> Reply<view::PutBackView> {
+    let (history, layout) = (history.inner().clone(), layout.0.clone());
+    tauri::async_runtime::spawn_blocking(move || -> Result<view::PutBackView, String> {
+        let mut list = history.lock();
+        if which.list != list.list {
+            return Err("the history changed: look at it again, then choose".into());
+        }
+        let group = usize::try_from(which.group)
+            .ok()
+            .and_then(|g| list.groups.get(g))
+            .ok_or("that clean is not in the history")?;
+        let wanted: Vec<bytebroom_core::relocate::JournalEntry> = match which.item {
+            Some(i) => vec![
+                usize::try_from(i)
+                    .ok()
+                    .and_then(|i| group.get(i))
+                    .ok_or("that file is not in the history")?
+                    .clone(),
+            ],
+            None => group.clone(),
+        };
+        let dir = app_dir(&layout)?;
+        let journal = open_journal(&dir)?;
+        // A whole clean: only what is still moved (put-back ones would just be refused).
+        let lines = journal.lines().map_err(|e| e.to_string())?;
+        let still: Vec<_> = bytebroom_core::history::move_history(&lines)
+            .into_iter()
+            .filter(|r| r.undone.is_none())
+            .map(|r| r.entry)
+            .collect();
+        let wanted: Vec<_> = if which.item.is_none() {
+            wanted.into_iter().filter(|e| still.contains(e)).collect()
+        } else {
+            wanted
+        };
+        if wanted.is_empty() {
+            return Err("nothing in that clean is still moved".into());
+        }
+        let at = bytebroom_core::win::locations::locations(&layout);
+        let results = bytebroom_core::history::undo_entries(
+            &journal,
+            &wanted,
+            &|e| bytebroom_core::history::undo_policy(&at, &layout, e),
+            &bytebroom_core::relocate::undo_move,
+        );
+        drop(journal);
+        let message = view::put_back_message(&wanted, &results);
+        let history = read_history(&mut list, &layout)?;
+        Ok(view::PutBackView { message, history })
+    })
+    .await
+    .map_err(|_| CommandError::new("putting back stopped unexpectedly; look at the history again"))?
+    .map_err(|e| CommandError::new(&e))
+}
+
+/// Clear the history: both journals are deleted (decision 5). The files they list stay exactly
+/// where they are, but moved files can no longer be put back from ByteBroom. The page asks
+/// first.
+#[tauri::command]
+async fn clear_history(
+    history: State<'_, Arc<History>>,
+    layout: State<'_, Layout>,
+) -> Reply<view::HistoryView> {
+    let (history, layout) = (history.inner().clone(), layout.0.clone());
+    tauri::async_runtime::spawn_blocking(move || -> Result<view::HistoryView, String> {
+        let mut list = history.lock();
+        let dir = app_dir(&layout)?;
+        bytebroom_core::history::clear_history(&dir)?;
+        drop(dir);
+        read_history(&mut list, &layout)
+    })
+    .await
+    .map_err(|_| CommandError::new("the history could not be cleared"))?
+    .map_err(|e| CommandError::new(&e))
 }
 
 /// Act on exactly the confirmed preview, once: Rust takes the preview it built (the page sends
@@ -152,6 +324,7 @@ fn open_journal(layout: &SystemLayout) -> Result<bytebroom_core::relocate::Journ
 async fn clean(
     app: AppHandle,
     session: State<'_, Arc<Session>>,
+    history: State<'_, Arc<History>>,
     layout: State<'_, Layout>,
     preview_id: PreviewId,
 ) -> Reply<CleanView> {
@@ -173,13 +346,18 @@ async fn clean(
         }
     }
     let layout = layout.0.clone();
+    let history = history.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = guard;
-        let journal = open_journal(&layout).map_err(|why| {
+        // No put-back or clear while this clean writes the journals.
+        let _history = history.lock();
+        let unusable = |why: String| {
             CommandError::new(&format!(
                 "nothing was cleaned: ByteBroom's folder in local app data can't be used ({why})"
             ))
-        })?;
+        };
+        let dir = app_dir(&layout).map_err(unusable)?;
+        let journal = open_journal(&dir).map_err(unusable)?;
         let ctx = bytebroom_core::act::Context {
             layout: &layout,
             now: SystemTime::now(),
@@ -187,7 +365,19 @@ async fn clean(
             recycle: &bytebroom_core::recycle::recycle_targets,
         };
         let results = bytebroom_core::act::carry_out(&ready.findings, &ready.preview, &ctx);
-        Ok(view::clean_view(&results, ready.preview.move_to.as_ref()))
+        let mut view = view::clean_view(&results, ready.preview.move_to.as_ref());
+        // Decision 2: what was recycled goes into recycled.journal (names stay in local app
+        // data; the log keeps counts only). The clean itself is done either way.
+        let records = bytebroom_core::history::recycled_records(journal.clean, &results);
+        if let Err(why) =
+            bytebroom_core::history::RecycledJournal::open(&dir).and_then(|j| j.append(&records))
+        {
+            view.history_note = Some(format!(
+                "The clean is done, but the history could not list what was recycled ({why}). \
+                 Those items are in the Recycle Bin."
+            ));
+        }
+        Ok(view)
     })
     .await
     .map_err(|_| {
@@ -414,6 +604,7 @@ pub fn run() -> tauri::Result<()> {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(Arc::new(Session::default()))
+        .manage(Arc::new(History::default()))
         .manage(Layout(bytebroom_core::win::system_layout()))
         .invoke_handler(tauri::generate_handler![
             start_scan,
@@ -425,6 +616,9 @@ pub fn run() -> tauri::Result<()> {
             open_recycle_bin,
             red_actions,
             run_red_action,
+            history,
+            put_back,
+            clear_history,
         ])
         .setup(|app| {
             WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))

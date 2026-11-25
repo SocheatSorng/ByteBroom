@@ -75,3 +75,16 @@ pub struct PreviewId {
     /// Which preview of that scan.
     pub number: u32,
 }
+
+/// Moves to put back (phase 5): one clean's moves, or one of them, as the history list numbered
+/// them. Dies with its list: a later list has a different `list` number, so old IDs are refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PutBackId {
+    /// Which history list handed this ID out.
+    pub list: u32,
+    /// The clean's place in that list.
+    pub group: u32,
+    /// One move in that clean, or `None` for every move of it still moved.
+    pub item: Option<u32>,
+}

@@ -197,6 +197,49 @@
     };
   }
 
+  // Fake history (phase 5): made-up names only.
+  const day = DAY;
+  const moved = (item, name, bytes, extra = {}) => ({
+    item,
+    name,
+    from: `C:\\Users\\Test\\Downloads\\${name}`,
+    to: `E:\\Archive\\${name}`,
+    bytes,
+    putBackAt: null,
+    unavailable: null,
+    ...extra,
+  });
+  let fakeMoves = [
+    {
+      group: 0,
+      when: now - day,
+      items: [
+        moved(0, "holiday-video-2019.mkv", 4.2 * 1024 ** 3),
+        moved(1, "old-backup.zip", 812 * 1024 ** 2),
+        moved(2, "a-very-long-file-name-that-goes-on-and-on-to-test-wrapping-in-the-history.iso", 3.1 * 1024 ** 3),
+      ],
+    },
+    {
+      group: 1,
+      when: now - 9 * day,
+      items: [
+        moved(0, "installer-2021.exe", 96 * 1024 ** 2, { putBackAt: now - 8 * day }),
+        moved(1, "disk-image.vhdx", 20 * 1024 ** 3, { unavailable: "the moved file isn't there (is its drive plugged in?)" }),
+      ],
+    },
+  ];
+  let fakeRecycled = [
+    { when: now - day, name: "setup-old.msi", original: "C:\\Users\\Test\\Downloads\\setup-old.msi", bytes: 64 * 1024 ** 2 },
+    { when: now - 3 * day, name: "notes-copy (2).txt", original: "C:\\Users\\Test\\Documents\\notes-copy (2).txt", bytes: 2048 },
+  ];
+  let historyList = 0;
+  function historyView() {
+    historyList++;
+    fakeMoves.forEach((g, i) => (g.group = i));
+    for (const g of fakeMoves) g.canPutBack = g.items.filter((m) => m.putBackAt === null && !m.unavailable).length;
+    return { list: historyList, moves: fakeMoves, recycled: fakeRecycled };
+  }
+
   const commands = {
     start_scan() {
       scan++;
@@ -234,6 +277,24 @@
     },
     open_recycle_bin() {
       return null;
+    },
+    // Fake history shaped like view::HistoryView; nothing real is read or moved.
+    history() {
+      return historyView();
+    },
+    put_back({ which }) {
+      if (which.list !== historyList) throw { message: "the history changed: look at it again, then choose" };
+      const g = fakeMoves[which.group];
+      const items = which.item === null ? g.items.filter((m) => m.putBackAt === null && !m.unavailable) : [g.items[which.item]];
+      for (const m of items) m.putBackAt = Math.floor(Date.now() / 1000);
+      const message =
+        items.length === 1 ? `${items[0].name} is back where it was.` : `Put back ${items.length} of ${items.length} files.`;
+      return { message, history: historyView() };
+    },
+    clear_history() {
+      fakeMoves = [];
+      fakeRecycled = [];
+      return historyView();
     },
     // Fake texts shaped like bytebroom_core::red_actions; nothing real is touched.
     red_actions() {

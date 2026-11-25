@@ -13,6 +13,9 @@ const COMMANDS: &[&str] = &[
     "open_recycle_bin",
     "red_actions",
     "run_red_action",
+    "history",
+    "put_back",
+    "clear_history",
 ];
 
 fn main() {

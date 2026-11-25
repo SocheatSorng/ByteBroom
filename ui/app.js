@@ -680,6 +680,10 @@
         );
       }
     }
+    if (done.actions.some((a) => a.action === "move" && a.removed > 0)) {
+      box.append(el("p", { className: "note", text: "Moved files can be put back from History." }));
+    }
+    if (done.historyNote) box.append(el("p", { className: "error", text: done.historyNote }));
     $("open-bin").hidden = done.recycled === 0;
     setStatus("Done. Scan again to see what is left.");
     $("result-dialog").showModal();
@@ -694,6 +698,204 @@
       }
     } catch (e) {
       setStatus(`That folder can't be used: ${errorText(e)}`, true);
+    }
+  }
+
+  // ---- History (phase 5) -------------------------------------------------------------------
+  // The page sends only the list's number and places in it: never a path. Rust re-reads the
+  // journal and checks both ends on disk before putting anything back.
+
+  let history = null;
+  let historyBusy = false;
+
+  /** Ask a yes/no question in the page's own dialog (decision 4: no Windows dialog for undo). */
+  function ask(title, lines, yes) {
+    return new Promise((resolve) => {
+      const d = $("ask-dialog");
+      $("ask-h").textContent = title;
+      $("ask-content").replaceChildren(...lines.map((l) => (typeof l === "string" ? el("p", { text: l }) : l)));
+      $("ask-yes").textContent = yes;
+      d.returnValue = "";
+      d.addEventListener("close", () => resolve(d.returnValue === "yes"), { once: true });
+      d.showModal();
+    });
+  }
+
+  function showHistoryResult(text, isError = false) {
+    const p = $("history-result");
+    p.textContent = text;
+    p.classList.toggle("error", isError);
+    p.hidden = false;
+    setStatus(text.split("\n")[0], isError);
+  }
+
+  async function openHistory() {
+    $("history-result").hidden = true;
+    try {
+      history = await invoke("history");
+    } catch (e) {
+      setStatus(errorText(e), true);
+      return;
+    }
+    renderHistory();
+    $("history-dialog").showModal();
+  }
+
+  function renderHistory() {
+    const box = $("history-content");
+    const back = focusKey();
+    box.replaceChildren();
+    const h = history;
+    box.append(el("h3", { text: "Moved files" }));
+    if (h.moves.length === 0) {
+      box.append(el("p", { className: "note", text: "Nothing has been moved." }));
+    }
+    for (const g of h.moves) {
+      const still = g.items.filter((m) => m.putBackAt === null);
+      const head = el(
+        "div",
+        { className: "history-group-head" },
+        el("h4", {
+          text: `${date(g.when)}: ${plural(g.items.length, "file")} moved${still.length < g.items.length ? `, ${still.length} still moved` : ""}`,
+        }),
+      );
+      if (g.canPutBack > 1) {
+        head.append(
+          el("button", {
+            type: "button",
+            text: `Put back all ${g.canPutBack}…`,
+            disabled: historyBusy,
+            attrs: { "data-focus": `group-${g.group}` },
+            on: { click: () => putBack(g, null) },
+          }),
+        );
+      }
+      const list = el("ul", { className: "history-list" });
+      for (const m of g.items) {
+        let state;
+        if (m.putBackAt !== null) {
+          state = el("span", { className: "history-state done", text: `Put back ${date(m.putBackAt)}` });
+        } else if (m.unavailable) {
+          state = el("span", { className: "history-state", text: `Can't put back: ${m.unavailable}` });
+        } else {
+          state = el("button", {
+            type: "button",
+            text: "Put back…",
+            disabled: historyBusy,
+            attrs: { "data-focus": `item-${g.group}-${m.item}`, "aria-label": `Put back ${m.name}` },
+            on: { click: () => putBack(g, m) },
+          });
+        }
+        list.append(
+          el(
+            "li",
+            {},
+            el(
+              "div",
+              { className: "history-item" },
+              el("strong", { text: m.name }),
+              el("span", { className: "num", text: bytes(m.bytes) }),
+              state,
+            ),
+            el("div", { className: "history-paths", text: `From ${m.from}` }),
+            el("div", { className: "history-paths", text: `Now in ${m.to}` }),
+          ),
+        );
+      }
+      box.append(el("section", { className: "history-group" }, head, list));
+    }
+
+    box.append(el("h3", { text: "Sent to the Recycle Bin" }));
+    if (h.recycled.length === 0) {
+      box.append(el("p", { className: "note", text: "Nothing has been sent to the Recycle Bin." }));
+    } else {
+      box.append(
+        el(
+          "p",
+          {},
+          "Restore these from the Recycle Bin itself (select, then Restore). ",
+          el("button", {
+            type: "button",
+            text: "Open the Recycle Bin",
+            attrs: { "data-focus": "open-bin-history" },
+            on: { click: () => invoke("open_recycle_bin").catch((e) => showHistoryResult(errorText(e), true)) },
+          }),
+        ),
+        el(
+          "ul",
+          { className: "history-list" },
+          ...h.recycled.map((r) =>
+            el(
+              "li",
+              {},
+              el(
+                "div",
+                { className: "history-item" },
+                el("strong", { text: r.name }),
+                el("span", { className: "num", text: bytes(r.bytes) }),
+                el("span", { className: "history-state", text: date(r.when) }),
+              ),
+              el("div", { className: "history-paths", text: `From ${r.original}` }),
+            ),
+          ),
+        ),
+      );
+    }
+    $("clear-history").disabled = historyBusy || (h.moves.length === 0 && h.recycled.length === 0);
+    refocus(back);
+  }
+
+  async function putBack(group, item) {
+    if (historyBusy) return;
+    const files = item ? [item] : group.items.filter((m) => m.putBackAt === null && !m.unavailable);
+    const ok = await ask(
+      item ? `Put back ${item.name}?` : `Put back ${plural(files.length, "file")}?`,
+      [
+        item
+          ? `It goes back to ${item.from}.`
+          : "Each goes back to where it was:",
+        item ? null : el("ul", { className: "path-list" }, ...files.map((m) => el("li", { text: m.from }))),
+        "Each file is copied back and checked; the moved copy is removed only after the copy matches. Nothing already at the original place is replaced.",
+      ].filter((l) => l !== null),
+      "Put back",
+    );
+    if (!ok) return;
+    historyBusy = true;
+    renderHistory();
+    showHistoryResult("Putting back… each file is checked before the moved copy is removed.");
+    try {
+      const done = await invoke("put_back", {
+        which: { list: history.list, group: group.group, item: item ? item.item : null },
+      });
+      history = done.history;
+      showHistoryResult(done.message, done.message.includes("\n") || done.message.includes("was not"));
+    } catch (e) {
+      showHistoryResult(errorText(e), true);
+    } finally {
+      historyBusy = false;
+      renderHistory();
+    }
+  }
+
+  async function clearHistory() {
+    const ok = await ask(
+      "Clear the history?",
+      [
+        "ByteBroom forgets what it moved and recycled. The files themselves stay exactly where they are.",
+        "Moved files can then no longer be put back from ByteBroom; you would move them back by hand. Recycled items stay in the Recycle Bin.",
+      ],
+      "Clear history",
+    );
+    if (!ok) return;
+    historyBusy = true;
+    try {
+      history = await invoke("clear_history");
+      showHistoryResult("History cleared. No file was touched.");
+    } catch (e) {
+      showHistoryResult(errorText(e), true);
+    } finally {
+      historyBusy = false;
+      renderHistory();
     }
   }
 
@@ -725,6 +927,9 @@
   $("preview").addEventListener("click", openPreview);
   $("confirm-clean").addEventListener("click", confirmClean);
   $("pick-dest").addEventListener("click", pickDestination);
+  $("open-history").addEventListener("click", openHistory);
+  $("clear-history").addEventListener("click", clearHistory);
+  $("history-dialog").addEventListener("close", () => $("open-history").focus());
   $("open-bin").addEventListener("click", () =>
     invoke("open_recycle_bin").catch((e) => setStatus(errorText(e), true)),
   );

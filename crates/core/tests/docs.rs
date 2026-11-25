@@ -218,13 +218,38 @@ fn the_window_commands_and_promises_match_the_code() {
     let confirm = read("src-tauri/src/confirm.rs");
     assert!(readme.contains("`ByteBroom\\moves.journal`"));
     assert!(relocate.contains("open_or_create_dir(\"ByteBroom\")"));
-    assert!(lib.contains("\"moves.journal\""));
+    // Phase 5: the journals' names live in the history module, which the window uses.
+    let history = read("crates/core/src/history.rs");
+    assert!(history.contains("[\"moves.journal\", RecycledJournal::NAME]"));
+    assert!(history.contains("NAME: &'static str = \"recycled.journal\""));
+    assert!(lib.contains("HISTORY_FILES[0]"));
+    assert!(readme.contains("`ByteBroom\\recycled.journal`"));
     assert!(readme.contains("`ByteBroom\\bytebroom.log`"));
     assert!(confirm.contains("\"bytebroom.log\""));
 
     // The Recycle Bin warning, in the README and in the preview.
     assert!(readme.contains("recycling frees nothing by itself"));
     assert!(app.contains("That space comes back only when you empty the bin"));
+
+    // Phase 5: the History view's buttons and promises, as the README names them.
+    let page = read("ui/index.html");
+    assert!(page.contains(">History…</button>") && readme.contains("**History…**"));
+    assert!(page.contains(">Clear history…</button>") && readme.contains("**Clear history…**"));
+    for (label, readme_label) in [
+        ("\"Put back…\"", "**Put back…**"),
+        ("`Put back all ${g.canPutBack}…`", "**Put back all…**"),
+        ("\"Open the Recycle Bin\"", "**Open the Recycle Bin**"),
+    ] {
+        assert!(app.contains(label), "app.js lacks {label}");
+        assert!(readme.contains(readme_label), "README lacks {readme_label}");
+    }
+    // Decision 3: ByteBroom never restores recycled items; decision 4: the page asks, Rust
+    // checks the hash before removing the moved copy; rule S3: never elevated.
+    assert!(readme.contains("ByteBroom never restores them itself"));
+    assert!(readme.contains("removed only after the copy matches"));
+    assert!(readme.contains("Putting back never runs as administrator."));
+    assert!(relocate.contains("copy is deleted only after the restored file matched"));
+    assert!(app.contains("the moved copy is removed only after the copy matches"));
 }
 
 #[test]

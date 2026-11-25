@@ -307,6 +307,8 @@ pub struct CleanView {
     pub recycled: u64,
     /// Where moved items went.
     pub move_to: Option<String>,
+    /// Set when the clean worked but the history could not record what it recycled.
+    pub history_note: Option<String>,
 }
 
 fn skipped_view(s: &bytebroom_core::engine::Skipped) -> SkippedView {
@@ -338,7 +340,174 @@ pub fn clean_view(results: &[ActionResult], move_to: Option<&WinPath>) -> CleanV
         recycled: actions.iter().map(|a| a.bytes_recycled).sum(),
         actions,
         move_to: move_to.map(ToString::to_string),
+        history_note: None,
     }
+}
+
+/// One move in the history.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MovedView {
+    /// Its place in its clean, for `put_back`.
+    pub item: u32,
+    /// The file's name.
+    pub name: String,
+    /// Where it was (and goes back to).
+    pub from: String,
+    /// Where it is now.
+    pub to: String,
+    /// Size in bytes.
+    pub bytes: u64,
+    /// When it was put back (seconds since 1970), or `None` while it is still moved.
+    pub put_back_at: Option<u64>,
+    /// Why "Put back" can't be offered now (still moved only), or `None` if it can.
+    pub unavailable: Option<&'static str>,
+}
+
+/// One clean's moves.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MoveGroupView {
+    /// Its place in the list, for `put_back`.
+    pub group: u32,
+    /// When it moved them (seconds since 1970).
+    pub when: u64,
+    /// The moves, oldest first.
+    pub items: Vec<MovedView>,
+    /// How many are still moved and can be put back now.
+    pub can_put_back: usize,
+}
+
+/// One item ByteBroom sent to the Recycle Bin.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecycledView {
+    /// When (seconds since 1970).
+    pub when: u64,
+    /// Its name.
+    pub name: String,
+    /// Where it was.
+    pub original: String,
+    /// Size in bytes.
+    pub bytes: u64,
+}
+
+/// The History view: moves by clean (newest first) and recycled items (newest first).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryView {
+    /// The list's number: `put_back` IDs from any other list are refused.
+    pub list: u32,
+    /// One entry per clean that moved files.
+    pub moves: Vec<MoveGroupView>,
+    /// Recycled items.
+    pub recycled: Vec<RecycledView>,
+}
+
+fn file_name(p: &WinPath) -> String {
+    p.parts().last().cloned().unwrap_or_default()
+}
+
+/// Build the History view. `unavailable` says why a still-moved file can't be put back now
+/// (only a quick look; putting back checks everything again).
+pub fn history_view(
+    list: u32,
+    groups: &[Vec<bytebroom_core::history::MoveRecord>],
+    recycled: &[bytebroom_core::history::RecycledRecord],
+    unavailable: &dyn Fn(&bytebroom_core::relocate::JournalEntry) -> Option<&'static str>,
+) -> HistoryView {
+    let moves = groups
+        .iter()
+        .enumerate()
+        .map(|(g, recs)| {
+            let items: Vec<MovedView> = recs
+                .iter()
+                .enumerate()
+                .map(|(i, r)| MovedView {
+                    item: u32::try_from(i).unwrap_or(u32::MAX),
+                    name: file_name(&r.entry.source),
+                    from: r.entry.source.to_string(),
+                    to: r.entry.dest.to_string(),
+                    bytes: r.entry.size,
+                    put_back_at: r.undone,
+                    unavailable: if r.undone.is_some() {
+                        None
+                    } else {
+                        unavailable(&r.entry)
+                    },
+                })
+                .collect();
+            MoveGroupView {
+                group: u32::try_from(g).unwrap_or(u32::MAX),
+                when: recs.iter().map(|r| r.entry.time).min().unwrap_or(0),
+                can_put_back: items
+                    .iter()
+                    .filter(|m| m.put_back_at.is_none() && m.unavailable.is_none())
+                    .count(),
+                items,
+            }
+        })
+        .collect();
+    let recycled = recycled
+        .iter()
+        .rev()
+        .map(|r| RecycledView {
+            when: r.time,
+            name: file_name(&r.original),
+            original: r.original.to_string(),
+            bytes: r.size,
+        })
+        .collect();
+    HistoryView {
+        list,
+        moves,
+        recycled,
+    }
+}
+
+/// What a put-back did, in words, and the history afterwards.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PutBackView {
+    /// For the owner.
+    pub message: String,
+    /// The history, read again.
+    pub history: HistoryView,
+}
+
+/// The owner's words for a put-back's results: how many went back, and each one that didn't,
+/// with why.
+pub fn put_back_message(
+    wanted: &[bytebroom_core::relocate::JournalEntry],
+    results: &[bytebroom_core::history::UndoResult],
+) -> String {
+    use bytebroom_core::history::UndoResult;
+    let back = results
+        .iter()
+        .filter(|r| !matches!(r, UndoResult::Refused(_)))
+        .count();
+    let mut text = if wanted.len() == 1 {
+        if back == 1 {
+            format!("{} is back where it was.", file_name(&wanted[0].source))
+        } else {
+            format!("{} was not put back.", file_name(&wanted[0].source))
+        }
+    } else {
+        format!("Put back {back} of {} files.", wanted.len())
+    };
+    for (e, r) in wanted.iter().zip(results) {
+        match r {
+            UndoResult::PutBack => {}
+            UndoResult::PutBackNotRecorded(_) => text.push_str(&format!(
+                "\n{}: put back, but the history could not record it.",
+                file_name(&e.source)
+            )),
+            UndoResult::Refused(why) => {
+                text.push_str(&format!("\n{}: {why}.", file_name(&e.source)));
+            }
+        }
+    }
+    text
 }
 
 fn seconds(t: SystemTime) -> u64 {
@@ -458,5 +627,87 @@ mod tests {
         // A move within one drive moves bytes but frees none.
         let same_drive = clean_view(&[result(Action::Move, 0, 0, gb)], None);
         assert_eq!(same_drive.freed_now, 0);
+    }
+
+    fn moved(n: u64, undone: Option<u64>) -> bytebroom_core::history::MoveRecord {
+        bytebroom_core::history::MoveRecord {
+            entry: bytebroom_core::relocate::JournalEntry {
+                clean: Some(1),
+                time: 100 + n,
+                sha256: "0F".repeat(32),
+                size: n,
+                source: WinPath::parse(&format!("C:\\Users\\Ann\\Downloads\\f{n}.iso")).unwrap(),
+                dest: WinPath::parse(&format!("D:\\Keep\\f{n}.iso")).unwrap(),
+            },
+            undone,
+        }
+    }
+
+    #[test]
+    fn the_history_offers_put_back_only_for_files_still_moved_and_reachable() {
+        use bytebroom_core::history::RecycledRecord;
+        let groups = vec![vec![moved(1, None), moved(2, Some(500)), moved(3, None)]];
+        let recycled = vec![
+            RecycledRecord {
+                clean: 1,
+                time: 10,
+                size: 5,
+                original: WinPath::parse("C:\\Users\\Ann\\Downloads\\old.msi").unwrap(),
+                in_bin: WinPath::parse("C:\\$Recycle.Bin\\S-1\\$R1.msi").unwrap(),
+            },
+            RecycledRecord {
+                clean: 2,
+                time: 20,
+                size: 6,
+                original: WinPath::parse("C:\\Users\\Ann\\Downloads\\new.msi").unwrap(),
+                in_bin: WinPath::parse("C:\\$Recycle.Bin\\S-1\\$R2.msi").unwrap(),
+            },
+        ];
+        let unplugged = |e: &bytebroom_core::relocate::JournalEntry| {
+            (e.size == 3).then_some("the moved file isn't there")
+        };
+        let v = history_view(7, &groups, &recycled, &unplugged);
+        assert_eq!(v.list, 7);
+        let g = &v.moves[0];
+        assert_eq!((g.group, g.when, g.can_put_back), (0, 101, 1));
+        assert_eq!(g.items[0].name, "f1.iso");
+        assert_eq!(g.items[0].unavailable, None);
+        assert_eq!(g.items[1].put_back_at, Some(500));
+        assert_eq!(
+            g.items[1].unavailable, None,
+            "a put-back file needs no reason"
+        );
+        assert_eq!(g.items[2].unavailable, Some("the moved file isn't there"));
+        // Recycled items, newest first.
+        assert_eq!(v.recycled[0].name, "new.msi");
+        assert_eq!(v.recycled[1].original, "C:\\Users\\Ann\\Downloads\\old.msi");
+    }
+
+    #[test]
+    fn the_put_back_message_says_how_many_and_why_not() {
+        use bytebroom_core::history::UndoResult;
+        let one = [moved(1, None).entry];
+        assert_eq!(
+            put_back_message(&one, &[UndoResult::PutBack]),
+            "f1.iso is back where it was."
+        );
+        assert_eq!(
+            put_back_message(
+                &one,
+                &[UndoResult::Refused("it was already put back".into())]
+            ),
+            "f1.iso was not put back.\nf1.iso: it was already put back."
+        );
+        let two = [moved(1, None).entry, moved(2, None).entry];
+        let text = put_back_message(
+            &two,
+            &[
+                UndoResult::PutBackNotRecorded("disk full".into()),
+                UndoResult::Refused("something is already at the original place".into()),
+            ],
+        );
+        assert!(text.starts_with("Put back 1 of 2 files."), "{text}");
+        assert!(text.contains("f1.iso: put back, but the history could not record it."));
+        assert!(text.contains("f2.iso: something is already at the original place."));
     }
 }

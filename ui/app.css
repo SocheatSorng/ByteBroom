@@ -682,3 +682,78 @@ label.confirm,
 .red-action-result.error {
   color: var(--danger);
 }
+
+/* ---- History (phase 5) ---- */
+
+#history-content {
+  max-height: 60vh;
+  overflow: auto;
+}
+
+#history-content h3 {
+  margin: 14px 0 6px;
+}
+
+.history-group {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  margin: 0 0 10px;
+  padding: 8px 10px;
+}
+
+.history-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.history-group-head h4 {
+  margin: 0;
+}
+
+.history-list {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+}
+
+.history-list li {
+  padding: 6px 0;
+  border-top: 1px solid var(--line);
+}
+
+.history-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.history-item strong {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.history-state {
+  color: var(--muted);
+}
+
+.history-state.done {
+  color: var(--green);
+}
+
+.history-paths {
+  font-size: 12px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.history-result {
+  white-space: pre-line;
+  margin: 8px 0;
+}
+
+.history-result.error {
+  color: var(--danger);
+}
