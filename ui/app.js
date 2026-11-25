@@ -951,9 +951,48 @@
     if (blocked) e.preventDefault();
   });
 
+  // ---- Updates (phase 6) -------------------------------------------------------------------
+  // Rust checks this repo's Releases once at start and returns only a plain version number.
+  // Installing sends nothing but the request: Rust downloads, checks the signature against
+  // ByteBroom's key, and only then runs the installer (Windows asks for administrator rights,
+  // and ByteBroom closes while it installs).
+
+  async function checkForUpdate() {
+    let found = null;
+    try {
+      found = await invoke("update_check");
+    } catch {
+      return; // offline or no release: say nothing
+    }
+    if (!found) return;
+    $("update-text").textContent = `ByteBroom ${found.version} is available. Install it now?`;
+    $("update").hidden = false;
+  }
+
+  async function installUpdate() {
+    $("update-install").disabled = true;
+    $("update-later").disabled = true;
+    $("update-text").textContent =
+      "Downloading and checking the update… Windows will then ask for administrator rights, and ByteBroom closes while it installs.";
+    try {
+      await invoke("install_update");
+    } catch (e) {
+      $("update-text").textContent = errorText(e);
+      $("update-later").disabled = false;
+      $("update-later").textContent = "Close";
+      $("update-later").focus();
+    }
+  }
+
   // ---- Wiring ------------------------------------------------------------------------------
 
   $("scan").addEventListener("click", startScan);
+  $("update-install").addEventListener("click", installUpdate);
+  $("update-later").addEventListener("click", () => {
+    $("update").hidden = true;
+    $("scan").focus();
+  });
+  checkForUpdate();
   $("cancel").addEventListener("click", () => invoke("cancel_scan"));
   $("preview").addEventListener("click", openPreview);
   $("confirm-clean").addEventListener("click", confirmClean);

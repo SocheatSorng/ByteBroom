@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 /// Every command the window may call. Adding one is a security decision: update this list, the
 /// capability file and `build.rs` together, and have the change reviewed.
-const COMMANDS: [&str; 12] = [
+const COMMANDS: [&str; 14] = [
     "start_scan",
     "cancel_scan",
     "scan_state",
@@ -22,6 +22,8 @@ const COMMANDS: [&str; 12] = [
     "history",
     "put_back",
     "clear_history",
+    "update_check",
+    "install_update",
 ];
 
 /// The only parameter types a command may take: IDs and fixed choices (see `boundary.rs`), or
@@ -122,8 +124,14 @@ fn every_command_is_on_the_list_and_registered() {
         .split(',')
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
-        // The history commands live in `history_cmd` (phase 5) and are registered by path.
-        .map(|s| s.strip_prefix("history_cmd::").unwrap_or(s).to_string())
+        // The history commands live in `history_cmd` (phase 5), the update ones in `update`
+        // (phase 6); both are registered by path.
+        .map(|s| {
+            s.strip_prefix("history_cmd::")
+                .or_else(|| s.strip_prefix("update::"))
+                .unwrap_or(s)
+                .to_string()
+        })
         .collect();
     registered.sort();
     assert_eq!(registered, sorted(&COMMANDS));
@@ -293,16 +301,104 @@ fn the_csp_forbids_remote_and_inline_code() {
 }
 
 #[test]
-fn the_app_loads_its_own_files_and_no_plugins() {
+fn the_app_loads_its_own_files_and_configures_only_the_updater() {
     let conf = json("tauri.conf.json");
     assert_eq!(conf["build"]["frontendDist"], "../ui");
     assert!(conf["build"].get("devUrl").is_none(), "no dev server");
-    assert!(conf.get("plugins").is_none(), "no plugin configuration");
+    let plugins: Vec<&String> = conf["plugins"].as_object().unwrap().keys().collect();
+    assert_eq!(plugins, vec!["updater"], "only the updater is configured");
     assert_eq!(
         conf["app"]["windows"],
         serde_json::json!([]),
         "the window is built in lib.rs, with navigation locked"
     );
+}
+
+/// Phase 6, decision 2: updates come only from this repo's GitHub Releases, over https, signed by
+/// the owner's key, with the signed version checked. Changing any of this is a security decision.
+#[test]
+fn updates_come_only_from_this_repos_releases_signed_by_the_owners_key() {
+    let conf = json("tauri.conf.json");
+    let updater = conf["plugins"]["updater"].as_object().unwrap();
+    let mut keys: Vec<&str> = updater.keys().map(String::as_str).collect();
+    keys.sort();
+    assert_eq!(
+        keys,
+        ["endpoints", "pubkey", "requireSignedVersion", "windows"],
+        "no `dangerous*` switch or anything else"
+    );
+    assert_eq!(
+        updater["endpoints"],
+        serde_json::json!([
+            "https://github.com/SocheatSorng/ByteBroom/releases/latest/download/latest.json"
+        ])
+    );
+    assert_eq!(updater["requireSignedVersion"], true);
+    assert_eq!(
+        updater["windows"],
+        serde_json::json!({"installMode": "passive"})
+    );
+    // The public key: a base64-encoded minisign public key file, never a path or a secret key.
+    let pubkey = updater["pubkey"].as_str().unwrap();
+    let decoded = decode_base64(pubkey);
+    assert!(
+        decoded.starts_with("untrusted comment: minisign public key: "),
+        "pubkey is a minisign public key"
+    );
+    assert!(!decoded.to_lowercase().contains("secret"));
+}
+
+/// A minimal standard-base64 decoder, so this test needs no extra crate.
+fn decode_base64(text: &str) -> String {
+    const ABC: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut bits = 0u32;
+    let mut n = 0;
+    let mut out = Vec::new();
+    for c in text.bytes().filter(|&c| c != b'=') {
+        let v = ABC.iter().position(|&a| a == c).expect("base64") as u32;
+        bits = (bits << 6) | v;
+        n += 6;
+        if n >= 8 {
+            n -= 8;
+            out.push((bits >> n) as u8);
+            bits &= (1 << n) - 1;
+        }
+    }
+    String::from_utf8(out).expect("utf-8")
+}
+
+/// No private signing key, or anything that looks like one, is ever committed.
+#[test]
+fn no_private_key_is_in_the_repo() {
+    let root = crate_dir().join("..");
+    let out = std::process::Command::new("git")
+        .args(["ls-files", "-z"])
+        .current_dir(&root)
+        .output()
+        .expect("git ls-files");
+    let markers = [
+        "PRIVATE KEY-----",
+        "minisign encrypted secret key",
+        "minisign secret key",
+        // The base64 of "untrusted comment: rsign encrypted secret key", Tauri's key file header.
+        "dW50cnVzdGVkIGNvbW1lbnQ6IHJzaWduIGVuY3J5cHRlZCBzZWNyZXQga2V5",
+    ];
+    for name in String::from_utf8(out.stdout).unwrap().split('\0') {
+        if name.is_empty() || name == "src-tauri/tests/boundary.rs" {
+            continue;
+        }
+        let Ok(text) = fs::read_to_string(root.join(name)) else {
+            continue; // binary files (icons)
+        };
+        for marker in markers {
+            assert!(!text.contains(marker), "{name} holds a private-key marker");
+        }
+        let lower = name.to_lowercase();
+        assert!(
+            !lower.ends_with(".key") && !lower.contains("signing"),
+            "{name} looks like a key file"
+        );
+    }
 }
 
 #[test]
@@ -319,8 +415,16 @@ fn the_app_depends_only_on_approved_crates() {
         .filter(|n| !n.is_empty())
         .collect();
     names.sort();
-    // Owner's decision 4: tauri and the dialog plugin (Rust side only); no other plugins.
-    let approved = ["bytebroom-core", "serde", "tauri", "tauri-plugin-dialog"];
+    // Phase 3, decision 4: tauri and the dialog plugin (Rust side only). Phase 6, decision 2: the
+    // updater plugin, driven from Rust only (no `updater:` permission; see the capability test).
+    let approved = [
+        "bytebroom-core",
+        "serde",
+        "serde_json",
+        "tauri",
+        "tauri-plugin-dialog",
+        "tauri-plugin-updater",
+    ];
     for name in &names {
         assert!(approved.contains(name), "unapproved dependency {name}");
     }

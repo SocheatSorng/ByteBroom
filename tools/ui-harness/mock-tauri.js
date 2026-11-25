@@ -291,6 +291,15 @@
         items.length === 1 ? `${items[0].name} is back where it was.` : `Put back ${items.length} of ${items.length} files.`;
       return { message, history: historyView() };
     },
+    // Fake updater (phase 6): ?update=1 offers 9.9.9; ?update=bad also makes installing fail.
+    update_check() {
+      return params.get("update") ? { version: "9.9.9" } : null;
+    },
+    install_update() {
+      if (params.get("update") === "bad")
+        throw { message: "the update was refused: its signature doesn't match ByteBroom's key. Nothing was installed." };
+      return null;
+    },
     clear_history() {
       fakeMoves = [];
       fakeRecycled = [];

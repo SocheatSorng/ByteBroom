@@ -16,6 +16,8 @@ const COMMANDS: &[&str] = &[
     "history",
     "put_back",
     "clear_history",
+    "update_check",
+    "install_update",
 ];
 
 fn main() {
@@ -31,5 +33,7 @@ fn main() {
     let resource = std::path::Path::new(&out).join("resource.lib");
     if resource.exists() {
         println!("cargo:rustc-link-arg-examples={}", resource.display());
+        // The same for integration tests that start a (mock) app, e.g. tests/updater.rs.
+        println!("cargo:rustc-link-arg-tests={}", resource.display());
     }
 }

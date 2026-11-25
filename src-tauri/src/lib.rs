@@ -10,6 +10,7 @@ pub mod boundary;
 pub mod confirm;
 pub mod history_cmd;
 pub mod session;
+pub mod update;
 pub mod view;
 
 use boundary::{Choice, PreviewId};
@@ -416,8 +417,11 @@ pub fn is_app_url(url: &tauri::Url) -> bool {
 pub fn run() -> tauri::Result<()> {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        // Owner's decision 2: signed updates; the endpoint and key are fixed in tauri.conf.json.
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(Arc::new(Session::default()))
         .manage(Arc::new(History::default()))
+        .manage(Arc::new(update::Updates::default()))
         .manage(Layout(bytebroom_core::win::system_layout()))
         .invoke_handler(tauri::generate_handler![
             start_scan,
@@ -432,6 +436,8 @@ pub fn run() -> tauri::Result<()> {
             history_cmd::history,
             history_cmd::put_back,
             history_cmd::clear_history,
+            update::update_check,
+            update::install_update,
         ])
         .setup(|app| {
             WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
