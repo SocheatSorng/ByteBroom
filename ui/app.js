@@ -965,19 +965,29 @@
       return; // offline or no release: say nothing
     }
     if (!found) return;
-    $("update-text").textContent = `ByteBroom ${found.version} is available. Install it now?`;
     $("update").hidden = false;
+    showUpdateText(`ByteBroom ${found.version} is available. Install it now?`);
+  }
+
+  /** Show the banner's message and read it out once (through the page's live region). */
+  function showUpdateText(text, isError = false) {
+    $("update-text").textContent = text;
+    $("update").classList.toggle("error", isError);
+    $("announce").textContent = isError ? `Error: ${text}` : text;
   }
 
   async function installUpdate() {
     $("update-install").disabled = true;
     $("update-later").disabled = true;
-    $("update-text").textContent =
-      "Downloading and checking the update… Windows will then ask for administrator rights, and ByteBroom closes while it installs.";
+    showUpdateText(
+      "Downloading and checking the update… Windows will then ask for administrator rights, and ByteBroom closes while it installs.",
+    );
     try {
       await invoke("install_update");
     } catch (e) {
-      $("update-text").textContent = errorText(e);
+      // Rust's error text starts lowercase; show it as a sentence.
+      const why = errorText(e);
+      showUpdateText(why.charAt(0).toUpperCase() + why.slice(1), true);
       $("update-later").disabled = false;
       $("update-later").textContent = "Close";
       $("update-later").focus();

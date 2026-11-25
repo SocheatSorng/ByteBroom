@@ -171,6 +171,8 @@ h2[tabindex="-1"]:focus {
   padding: 10px 14px;
   background: var(--panel);
   border: 1px solid var(--line);
+  /* The accent edge marks it as a notice, like the History result line. */
+  border-left: 4px solid var(--accent);
   border-radius: 6px;
 }
 
@@ -178,13 +180,29 @@ h2[tabindex="-1"]:focus {
   display: none;
 }
 
+/* The text takes the room it needs; the buttons sit at the right while they fit and drop below,
+   left-aligned with the text, when the message is long or the window narrow. */
 .update p {
+  flex: 1 1 320px;
   margin: 0;
+  overflow-wrap: anywhere;
 }
 
 .update-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
+}
+
+/* A refused or failed install: red edge and tint (the words say it failed, too). */
+.update.error {
+  border-color: var(--line);
+  border-left-color: var(--danger);
+  background: var(--red-bg);
+}
+
+.update.error p {
+  color: var(--danger);
 }
 
 .status {

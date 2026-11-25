@@ -21,7 +21,9 @@
     </header>
 
     <!-- Phase 6: shown only when Rust found a newer release at start; nothing installs without a yes. -->
-    <section id="update" class="update" aria-labelledby="update-text" hidden>
+    <!-- Its messages are read out through #announce (always present), not a live region here: a
+         live region that appears with its text is often not announced. -->
+    <section id="update" class="update" aria-label="ByteBroom update" hidden>
       <p id="update-text"></p>
       <div class="update-actions">
         <button id="update-install" class="primary" type="button">Install update</button>
