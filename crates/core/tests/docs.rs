@@ -75,7 +75,13 @@ fn files_named_in_the_docs_exist() {
         "docs/intent/bytebroom.md",
         "docs/phase1-plan.md",
         "docs/phase2-plan.md",
+        "docs/phase3-plan.md",
         "crates/scan/Cargo.toml",
+        "build.ps1",
+        "src-tauri/Cargo.toml",
+        "src-tauri/tests/boundary.rs",
+        "tools/ui-harness/serve.mjs",
+        ".claude/agents/bytebroom-ui-designer.md",
     ] {
         assert!(
             repo_root().join(rel).exists(),
@@ -157,6 +163,61 @@ fn readme_never_listed_names_match_the_rules() {
     from_code.sort();
     from_readme.sort();
     assert_eq!(from_readme, from_code);
+}
+
+/// Phase 3: the window's commands and the promises the README makes about it are in the code.
+#[test]
+fn the_window_commands_and_promises_match_the_code() {
+    let readme = read("README.md");
+    let claude = read("CLAUDE.md");
+    let build = read("build.ps1");
+    for command in [
+        "cargo install --locked tauri-cli",
+        "cargo tauri dev",
+        "./build.ps1",
+        "node tools/ui-harness/serve.mjs",
+    ] {
+        assert!(
+            readme.contains(&format!("`{command}`")),
+            "README lacks {command}"
+        );
+    }
+    for command in [
+        "cargo tauri dev",
+        "./build.ps1",
+        "node tools/ui-harness/serve.mjs",
+    ] {
+        assert!(claude.contains(command), "CLAUDE.md lacks {command}");
+    }
+    assert!(build.contains("cargo tauri build --no-bundle"));
+    assert!(build.contains("cargo install --locked tauri-cli"));
+    assert!(readme.contains("`target\\release\\bytebroom.exe`"));
+    assert!(read("src-tauri/Cargo.toml").contains("name = \"bytebroom\""));
+
+    // Default actions (owner's decision 1) as the README states them.
+    let app = read("ui/app.js");
+    assert!(app.contains(r#"defaultAction = (f) => (f.tier === "green" ? "Delete" : "Recycle")"#));
+    assert!(readme.contains("Green items start ticked with \"Delete for good\""));
+    assert!(readme.contains("start with \"Recycle Bin\""));
+    for label in ["Delete for good", "Recycle Bin", "Move to folder"] {
+        assert!(
+            app.contains(&format!("\"{label}\"")),
+            "app.js lacks {label}"
+        );
+        assert!(
+            readme.contains(&format!("**{label}**")),
+            "README lacks {label}"
+        );
+    }
+
+    // The move journal is where the README says.
+    let lib = read("src-tauri/src/lib.rs");
+    assert!(readme.contains("`ByteBroom\\moves.journal`"));
+    assert!(lib.contains(".join(\"ByteBroom\")") && lib.contains("\"moves.journal\""));
+
+    // The Recycle Bin warning, in the README and in the preview.
+    assert!(readme.contains("recycling frees nothing by itself"));
+    assert!(app.contains("That space comes back only when you empty the bin"));
 }
 
 #[test]

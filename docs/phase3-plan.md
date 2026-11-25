@@ -160,7 +160,7 @@ Each task: code → tests → fmt + clippy → full tests → commit with a "why
     (`tools/ui-harness/mock-tauri.js`). The fake data never exists in Rust, so no build can switch
     it on; the browser pane can emulate dark mode and window sizes. The boundary test checks that
     the app has no Cargo features and that `ui/` never names the harness.
-- [ ] **7. Docs**
+- [x] **7. Docs**
   - README: how to run and build the app, what each confirmation means, and the same-drive Recycle Bin
     warning. The docs-drift test covers the new commands.
 - [ ] **8. Security review**

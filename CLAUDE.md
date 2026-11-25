@@ -9,12 +9,19 @@ in full to every change.
 
 ## Run, test, lint, build
 
-Rust workspace: `crates/core` (safety core, delete engine, scanner) and `crates/scan` (read-only scan
-tool). Keep the README's commands in step (a docs-drift test checks them).
+Rust workspace: `crates/core` (safety core, delete engine, scanner, preview, act), `crates/scan`
+(read-only scan tool) and `src-tauri` (the window's Tauri commands; its page is `ui/`). Keep the
+README's commands in step (a docs-drift test checks them).
 
 - All checks: `./check.ps1` (format check, clippy with `-D warnings`, `cargo test --workspace`,
   `cargo deny check`).
 - Read-only scan tool: `cargo run --release -p bytebroom-scan` (only the owner runs it on the real PC).
+- The window: `cargo tauri dev`; build with `./build.ps1` (makes `target\release\bytebroom.exe`).
+  Both scan and clean the real PC, so only the owner runs them. Claude checks the window's look
+  through the fake-data harness instead: `node tools/ui-harness/serve.mjs` (or `preview_start`
+  `ui-harness`), and the `bytebroom-ui-designer` agent.
+- The page↔Rust boundary is pinned by `src-tauri/tests/boundary.rs`; a new command, parameter type,
+  permission or dependency means changing that test on purpose and a security review.
 - Speed test (ignored by default, writes 200,000 files to temp):
   `cargo test --release -p bytebroom-core --test speed -- --ignored --nocapture`.
 

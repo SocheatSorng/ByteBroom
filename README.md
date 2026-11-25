@@ -4,8 +4,9 @@ A Windows disk-space cleaner. With your explicit permission (a Windows administr
 scans the drive, shows you what it can clean and how much space each item frees, and removes only what
 you confirm.
 
-> **Status: phase 2 (scanner).** The safety core and delete engine (phase 1) are done; the scanner
-> works, with a read-only scan tool. There is no window yet. The phases are in `docs/spec.md`.
+> **Status: phase 3 (window).** The safety core and delete engine (phase 1) and the scanner
+> (phase 2) are done. The window scans, previews and cleans without administrator rights; Windows'
+> own areas (the red tier) come in phase 4. The phases are in `docs/spec.md`.
 
 ## Safety promises
 
@@ -47,10 +48,38 @@ and files ending in `.kdbx`, `.kdb`, `.psafe3`, `.1pif`, `.agilekeychain`, `.gpg
 `.pem`, `.key` or `.ppk`. Their SQLite companions (the same name ending in -journal, -wal or
 -shm) are never listed either. Links and junctions are never followed.
 
+## Using the window
+
+1. **Scan.** ByteBroom only reads while it scans. Everything but duplicates is listed first;
+   duplicates follow when hashing ends. You can stop a scan at any time.
+2. **Choose.** Tick items and pick an action for each: **Delete for good**, **Recycle Bin**, or
+   **Move to folder**. Green items start ticked with "Delete for good"; amber items are never
+   ticked for you and start with "Recycle Bin". Cloud files (OneDrive) and items that can't be
+   cleaned where they are are shown but can't be ticked. Virtual machine disks are labelled:
+   deleting one removes the VM, so moving it is safer.
+3. **Preview.** The preview shows, per action, how many items and how much space really comes back
+   now. Items it leaves out are listed with the reason (for example a duplicate whose kept copy is
+   also chosen).
+4. **Confirm.** Green items need one confirm. Amber items need a second confirm that lists every
+   one of them. "Clean now" stays off until both are ticked.
+5. **Clean.** Right before acting, each item is checked again: it must still be the same file,
+   unchanged since the scan; a duplicate must still match its kept copy; and a temp item must not
+   have been used in the last 24 hours. Anything that changed stays, and the result says why.
+
+Where the space comes back:
+
+- **Delete for good:** at once.
+- **Move to folder:** at once, on the drive the files leave. Moves go only to a folder on another
+  fixed drive, because a move within one drive frees nothing. Every moved file is recorded with its
+  SHA-256 in `ByteBroom\moves.journal` in your local app data folder.
+- **Recycle Bin:** not until you empty the bin. Each drive's Recycle Bin is on that same drive, so
+  recycling frees nothing by itself; the result screen offers to open the bin.
+
 ## Install, run, test, build
 
-ByteBroom is written in Rust (the core) with a Tauri 2 window (from phase 3). For now there are two
-crates: the safety core and scanner in `crates/core`, and the read-only scan tool in `crates/scan`.
+ByteBroom is written in Rust: the safety core and scanner in `crates/core`, the read-only scan tool
+in `crates/scan`, and the Tauri 2 window in `src-tauri` (with its page in `ui/`, plain HTML, CSS and
+JavaScript with no packages).
 
 1. Install Rust once: `winget install Rustlang.Rustup`, then open a new terminal. The exact Rust version
    is pinned in `rust-toolchain.toml`, and rustup installs it on first use.
@@ -67,6 +96,13 @@ cargo deny check
 Tests build fake folder trees in a fresh temp folder and never touch your own files, drives or Recycle
 Bin. A docs-drift test checks that the commands above are the ones `check.ps1` and CI really run.
 
+To run the window, install the Tauri CLI once with `cargo install --locked tauri-cli`, then run
+`cargo tauri dev` in your project folder. To build it, run `./build.ps1`: it makes
+`target\release\bytebroom.exe` (the installer comes in phase 6).
+
+To check the window's look without scanning anything, run `node tools/ui-harness/serve.mjs` and open
+the address it prints. It serves the real page with made-up findings and never runs ByteBroom.
+
 To see what ByteBroom would offer to clean on your PC, run `cargo run --release -p bytebroom-scan` in
 your project folder. It only reads: it has no option that deletes, moves or recycles anything, and a
 test checks that its program contains none of the code that does. It prints the totals for each
@@ -79,6 +115,9 @@ is only printed in your terminal and never saved.
   `uv tool install pre-commit`), then hooks run on each commit. Hooks: gitleaks, private-key detection,
   large-file check, JSON/YAML checks, zizmor for GitHub Actions workflows.
 - GitHub Actions: `security.yml` (gitleaks over the full history, zizmor), Dependabot weekly.
+- The window's boundary is pinned by `src-tauri/tests/boundary.rs`: the seven commands, the one
+  capability file, the content security policy, the approved dependencies, and a page that loads
+  nothing remote and runs no inline code.
 
 ## License
 
