@@ -582,6 +582,18 @@ pub fn undo_move(policy: &Policy, entry: &JournalEntry) -> Result<(), String> {
     if moved.resolved.is_reparse_point || moved.is_directory {
         return Err("the moved file is not a plain file any more".into());
     }
+    // The journal is user-writable (security review S3): the "moved file" an entry names must
+    // be exactly at that path, off the hard floor, and have no other names, or undoing it could
+    // copy a protected file into a cleaned folder and delete the original.
+    if moved.resolved.final_path != entry.dest {
+        return Err("the moved file is not where the journal says".into());
+    }
+    if let Some(why) = denied_reason(&moved.resolved.final_path, policy.layout()) {
+        return Err(format!("the moved file is in a protected area: {why}"));
+    }
+    if moved.link_count != 1 {
+        return Err("the moved file has other names (hard links)".into());
+    }
     let (size, hash) = hash_reader(moved.reader().map_err(|e| e.to_string())?, None)?;
     if size != entry.size || hash != entry.sha256 {
         return Err("the moved file has changed since it was moved".into());

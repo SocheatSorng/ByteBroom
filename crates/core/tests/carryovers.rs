@@ -13,7 +13,7 @@ mod common;
 use bytebroom_core::engine::{SkipReason, Target, delete_targets};
 use bytebroom_core::paths::WinPath;
 use bytebroom_core::policy::Policy;
-use bytebroom_core::recycle::{is_in_recycle_bin, recycle_with};
+use bytebroom_core::recycle::{is_in_recycle_bin, is_same_open_file, recycle_with};
 use bytebroom_core::relocate::{Journal, JournalEntry, app_folder, move_targets, read_journal};
 use bytebroom_core::scan::FileIdentity;
 use bytebroom_core::win::dir::lock_dir;
@@ -196,7 +196,7 @@ fn recycle_refuses_a_swapped_file_before_the_shell_is_called() {
     let asked = RefCell::new(Vec::new());
     let shell = |p: &WinPath| {
         asked.borrow_mut().push(p.clone());
-        Ok(()) // a stand-in: moves nothing
+        Ok(None) // a stand-in: moves nothing
     };
     let out = recycle_with(
         &r.policy,
@@ -217,7 +217,7 @@ fn recycle_warns_when_the_checked_file_is_not_what_left() {
     // moment: whatever the shell took, it was not the file that passed the checks.
     let shell = |p: &WinPath| {
         fs::rename(format!("\\\\?\\{p}"), &aside).unwrap();
-        Ok(())
+        Ok(None)
     };
     let out = recycle_with(&r.policy, &[r.target("a.tmp", seen)], &shell);
     assert!(aside.exists());
@@ -230,6 +230,54 @@ fn recycle_warns_when_the_checked_file_is_not_what_left() {
         "{:?}",
         out.warnings[0]
     );
+}
+
+/// Review S2: the attacker moves the checked file aside, puts another file at the path, and
+/// the shell recycles that one. Here the "shell" reports a file other than the checked one as
+/// the item it created: that must be a warning, never a quiet success.
+#[test]
+fn recycle_warns_when_the_shell_reports_another_file_as_recycled() {
+    let r = Root::new("hid-bin-other");
+    let seen = identity_of(&r.file("a.tmp"));
+    let aside = r.file("aside.tmp");
+    let other = real(&r.file("b.tmp"));
+    let shell = |p: &WinPath| {
+        fs::rename(format!("\\\\?\\{p}"), &aside).unwrap();
+        Ok(Some(other.clone()))
+    };
+    let out = recycle_with(&r.policy, &[r.target("a.tmp", seen)], &shell);
+    assert_eq!(out.warnings.len(), 1, "{out:?}");
+    assert!(
+        out.warnings[0]
+            .reason
+            .to_string()
+            .contains("another file took its place"),
+        "{:?}",
+        out.warnings[0]
+    );
+}
+
+/// Review S2: the comparison behind "the shell recycled the file we checked", on temp files.
+#[test]
+fn the_reported_item_must_be_the_watched_file_itself() {
+    let r = Root::new("hid-same");
+    let a = real(&r.file("a.tmp"));
+    let watch = open_no_follow(&a, Access::Inspect).unwrap();
+    assert!(is_same_open_file(&watch, &a));
+    assert!(!is_same_open_file(&watch, &real(&r.file("b.tmp"))));
+    // Moved (as the shell moves it into the bin): still the same file, at its new place.
+    let moved = r.file("moved.tmp");
+    fs::rename(r.file("a.tmp"), &moved).unwrap();
+    assert!(is_same_open_file(&watch, &real(&moved)));
+    // A copy with the same contents, size and date is another file.
+    let copy = r.file("copy.tmp");
+    fs::copy(&moved, &copy).unwrap();
+    assert!(!is_same_open_file(&watch, &real(&copy)));
+    // A junction at the reported place is never taken for the file.
+    let link = r.file("link");
+    make_junction(&link, &r.root);
+    assert!(!is_same_open_file(&watch, &wp(&link)));
+    fs::remove_dir(&link).unwrap();
 }
 
 #[test]
@@ -323,4 +371,33 @@ fn a_hard_linked_or_linked_journal_is_refused() {
     );
     drop(held);
     fs::remove_dir(app.join("other.journal")).unwrap();
+}
+
+/// The log starts again above its size limit by renaming it inside the held folder: a plain
+/// file is renamed (replacing the old copy); a hard-linked one is refused and left alone.
+#[test]
+fn the_log_is_renamed_only_inside_the_held_folder_and_only_if_plain() {
+    let dir = CleanDir::new("jr-rotate");
+    let app = dir.0.join("app");
+    write_file(&app.join("bytebroom.log"), b"new");
+    write_file(&app.join("bytebroom.log.old"), b"old");
+    let held = lock_dir(&real(&app)).unwrap();
+    held.replace_name("bytebroom.log", "bytebroom.log.old")
+        .unwrap();
+    assert!(!app.join("bytebroom.log").exists());
+    assert_eq!(fs::read(app.join("bytebroom.log.old")).unwrap(), b"new");
+
+    let sentinel = dir.0.join("sentinel");
+    write_file(&sentinel.join("precious.txt"), b"precious");
+    fs::hard_link(sentinel.join("precious.txt"), app.join("bytebroom.log")).unwrap();
+    assert!(
+        held.replace_name("bytebroom.log", "bytebroom.log.old")
+            .is_err()
+    );
+    assert!(app.join("bytebroom.log").exists());
+    assert_eq!(
+        fs::read(sentinel.join("precious.txt")).unwrap(),
+        b"precious"
+    );
+    assert!(held.replace_name("bytebroom.log", "..\\escape").is_err());
 }

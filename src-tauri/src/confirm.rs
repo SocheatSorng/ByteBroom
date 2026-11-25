@@ -3,55 +3,55 @@
 //!
 //! Phase 3's open bug: the owner never saw this dialog, yet the clean went ahead. Every failure
 //! inside the dialog plugin and `rfd` gives "Cancel", so only a press on "Clean them" (a click,
-//! or Enter, since it is the default button) could let it through. The likeliest story is a
+//! or Enter, since it was the default button) could let it through. The likeliest story is a
 //! second click or Enter carried over from the page's own confirm, landing on a dialog that had
-//! no parent window. So:
+//! no parent window. So (with the security review's S1):
 //!
-//! - the dialog has the main window as its parent (it opens over it, modal to it);
-//! - only the exact answer "Clean them" goes ahead; anything else, or no window, cancels;
-//! - an answer given within [`MIN_READ`] of the dialog opening can't have followed reading it,
-//!   so it cancels too;
+//! - the dialog is ByteBroom's own task dialog (`bytebroom_core::win::taskdialog`), owned by the
+//!   main window, with **Cancel as the default button**;
+//! - only the confirming button goes ahead; Cancel, Esc, closing it, no window, or a dialog that
+//!   can't be shown all cancel;
+//! - an answer given within [`MIN_READ`] of Windows creating the dialog can't have followed
+//!   reading it, so it cancels too;
 //! - every answer is logged with how long the dialog was open and whether it had a parent,
 //!   in `ByteBroom\bytebroom.log` (no file names: only counts and the answer).
 
 use bytebroom_core::paths::WinPath;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use bytebroom_core::win::taskdialog::{self, Answer, Asked, Question};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager, Runtime};
-use tauri_plugin_dialog::{
-    DialogExt, MessageDialogButtons, MessageDialogKind, MessageDialogResult,
-};
 
-/// The button that cleans. Only this exact answer goes ahead.
+/// The button that cleans. Only this button goes ahead.
 pub const CLEAN_THEM: &str = "Clean them";
 /// The dialog's title.
 pub const TITLE: &str = "ByteBroom: clean your own files?";
 /// Answers faster than this are taken as not read.
 pub const MIN_READ: Duration = Duration::from_secs(1);
+/// The log is started again (the old one kept as `bytebroom.log.old`) above this size.
+pub const LOG_LIMIT: u64 = 256 * 1024;
 
 /// What the owner's answer means.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verdict {
     /// "Clean them", pressed after the dialog had been open long enough to read.
     Clean,
-    /// Cancel, the dialog closed, or any answer other than "Clean them".
+    /// Cancel, Esc, or the dialog closed.
     Cancelled,
     /// "Clean them", but too fast to have been read: taken as a stray click or key.
     TooFast,
     /// No main window to show the dialog over, so it was not shown.
     NoWindow,
+    /// Windows could not show the dialog.
+    Unavailable,
 }
 
 /// Decide what an answer means. Pure.
-pub fn verdict(answer: &MessageDialogResult, open_for: Duration) -> Verdict {
-    match answer {
-        MessageDialogResult::Custom(label) if label == CLEAN_THEM => {
-            if open_for < MIN_READ {
-                Verdict::TooFast
-            } else {
-                Verdict::Clean
-            }
-        }
-        _ => Verdict::Cancelled,
+pub fn verdict(asked: &Asked) -> Verdict {
+    match asked.answer {
+        Answer::Confirm if asked.open_for >= MIN_READ => Verdict::Clean,
+        Answer::Confirm => Verdict::TooFast,
+        Answer::Cancel => Verdict::Cancelled,
+        Answer::Unavailable => Verdict::Unavailable,
     }
 }
 
@@ -65,28 +65,28 @@ pub fn refusal(v: Verdict) -> Option<&'static str> {
              could be read. Preview again, and read the dialog before choosing.",
         ),
         Verdict::NoWindow => Some("nothing was cleaned: ByteBroom's window could not be found."),
+        Verdict::Unavailable => {
+            Some("nothing was cleaned: Windows could not show the confirmation dialog.")
+        }
     }
 }
 
-/// One log line: when, how many amber items, whether the dialog had a parent, the raw answer,
-/// how long it was open, and the verdict. Holds no file names. Pure.
+/// One log line: when, how many amber items, whether the dialog had a parent, the answer, how
+/// long it was open, and the verdict. Holds no file names. Pure.
 pub fn log_line(
     at: SystemTime,
     items: usize,
     parent: bool,
-    answer: Option<&MessageDialogResult>,
-    open_for: Duration,
+    asked: Option<&Asked>,
     v: Verdict,
 ) -> String {
     let secs = at
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let answer = match answer {
-        None => "not shown".to_string(),
-        Some(MessageDialogResult::Custom(label)) if label == CLEAN_THEM => "Clean them".into(),
-        Some(MessageDialogResult::Custom(_)) => "other button".into(),
-        Some(other) => format!("{other:?}"),
+    let (answer, open_for) = match asked {
+        None => ("not shown".to_string(), Duration::ZERO),
+        Some(a) => (format!("{:?}", a.answer), a.open_for),
     };
     format!(
         "{secs}\tamber-confirm\titems={items}\tparent={}\tanswer={answer}\topen_ms={}\t{v:?}",
@@ -95,38 +95,39 @@ pub fn log_line(
     )
 }
 
-/// Ask the owner in Windows' own dialog, over the main window, and log the answer.
+/// Ask the owner in Windows' own dialog, over the main window, and log the answer. Blocks until
+/// the owner answers: call it off the async runtime.
 pub fn ask<R: Runtime>(
     app: &AppHandle<R>,
-    question: String,
+    question: &str,
     items: usize,
     local_app_data: Option<&WinPath>,
 ) -> Verdict {
-    let Some(window) = app.get_webview_window("main") else {
+    let parent = app
+        .get_webview_window("main")
+        .and_then(|w| w.hwnd().ok())
+        .map(|h| h.0 as isize)
+        .filter(|h| *h != 0);
+    let Some(parent) = parent else {
         let v = Verdict::NoWindow;
         log(
             local_app_data,
-            &log_line(SystemTime::now(), items, false, None, Duration::ZERO, v),
+            &log_line(SystemTime::now(), items, false, None, v),
         );
         return v;
     };
-    let shown = Instant::now();
-    let answer = app
-        .dialog()
-        .message(question)
-        .title(TITLE)
-        .kind(MessageDialogKind::Warning)
-        .buttons(MessageDialogButtons::OkCancelCustom(
-            CLEAN_THEM.into(),
-            "Cancel".into(),
-        ))
-        .parent(&window)
-        .blocking_show_with_result();
-    let open_for = shown.elapsed();
-    let v = verdict(&answer, open_for);
+    let asked = taskdialog::ask(
+        parent,
+        &Question {
+            title: TITLE,
+            text: question,
+            confirm: CLEAN_THEM,
+        },
+    );
+    let v = verdict(&asked);
     log(
         local_app_data,
-        &log_line(SystemTime::now(), items, true, Some(&answer), open_for, v),
+        &log_line(SystemTime::now(), items, true, Some(&asked), v),
     );
     v
 }
@@ -141,6 +142,15 @@ pub fn log(local_app_data: Option<&WinPath>, line: &str) {
         return;
     };
     if let Ok((mut file, _)) = dir.open_append("bytebroom.log") {
+        if file.metadata().map(|m| m.len()).unwrap_or(0) > LOG_LIMIT {
+            // Start again: keep one old copy, renamed through the held folder (no links).
+            drop(file);
+            let _ = dir.replace_name("bytebroom.log", "bytebroom.log.old");
+            let Ok((again, _)) = dir.open_append("bytebroom.log") else {
+                return;
+            };
+            file = again;
+        }
         let _ = writeln!(file, "{line}");
     }
 }
@@ -151,43 +161,45 @@ mod tests {
 
     const LONG: Duration = Duration::from_secs(3);
 
+    fn asked(answer: Answer, open_for: Duration) -> Asked {
+        Asked { answer, open_for }
+    }
+
     #[test]
-    fn only_the_exact_clean_button_read_for_a_second_goes_ahead() {
-        let clean = MessageDialogResult::Custom(CLEAN_THEM.into());
-        assert_eq!(verdict(&clean, LONG), Verdict::Clean);
-        assert_eq!(verdict(&clean, MIN_READ), Verdict::Clean);
-        for not in [
-            MessageDialogResult::Custom("Cancel".into()),
-            MessageDialogResult::Custom("clean them".into()),
-            MessageDialogResult::Custom(String::new()),
-            MessageDialogResult::Ok,
-            MessageDialogResult::Yes,
-            MessageDialogResult::Cancel,
-            MessageDialogResult::No,
-        ] {
-            assert_eq!(verdict(&not, LONG), Verdict::Cancelled, "{not:?}");
-        }
+    fn only_the_clean_button_read_for_a_second_goes_ahead() {
+        assert_eq!(verdict(&asked(Answer::Confirm, LONG)), Verdict::Clean);
+        assert_eq!(verdict(&asked(Answer::Confirm, MIN_READ)), Verdict::Clean);
+        assert_eq!(verdict(&asked(Answer::Cancel, LONG)), Verdict::Cancelled);
+        assert_eq!(
+            verdict(&asked(Answer::Unavailable, LONG)),
+            Verdict::Unavailable
+        );
     }
 
     #[test]
     fn a_clean_answer_faster_than_reading_is_refused() {
-        let clean = MessageDialogResult::Custom(CLEAN_THEM.into());
         for fast in [0, 50, 400, 999] {
             assert_eq!(
-                verdict(&clean, Duration::from_millis(fast)),
+                verdict(&asked(Answer::Confirm, Duration::from_millis(fast))),
                 Verdict::TooFast,
                 "{fast} ms"
             );
         }
-        // A fast Cancel is just a cancel.
-        let cancel = MessageDialogResult::Custom("Cancel".into());
-        assert_eq!(verdict(&cancel, Duration::ZERO), Verdict::Cancelled);
+        assert_eq!(
+            verdict(&asked(Answer::Cancel, Duration::ZERO)),
+            Verdict::Cancelled
+        );
     }
 
     #[test]
     fn every_verdict_but_clean_stops_with_a_message() {
         assert_eq!(refusal(Verdict::Clean), None);
-        for v in [Verdict::Cancelled, Verdict::TooFast, Verdict::NoWindow] {
+        for v in [
+            Verdict::Cancelled,
+            Verdict::TooFast,
+            Verdict::NoWindow,
+            Verdict::Unavailable,
+        ] {
             assert!(refusal(v).unwrap().contains("nothing was cleaned"), "{v:?}");
         }
     }
@@ -199,26 +211,13 @@ mod tests {
             at,
             2,
             true,
-            Some(&MessageDialogResult::Custom(CLEAN_THEM.into())),
-            Duration::from_millis(2345),
+            Some(&asked(Answer::Confirm, Duration::from_millis(2345))),
             Verdict::Clean,
         );
         assert_eq!(
             line,
-            "1790000000\tamber-confirm\titems=2\tparent=main window\tanswer=Clean them\topen_ms=2345\tClean"
+            "1790000000\tamber-confirm\titems=2\tparent=main window\tanswer=Confirm\topen_ms=2345\tClean"
         );
-        let other = log_line(
-            at,
-            1,
-            false,
-            Some(&MessageDialogResult::Custom("D:\\secret\\name.txt".into())),
-            Duration::ZERO,
-            Verdict::Cancelled,
-        );
-        assert!(!other.contains("secret"), "{other}");
-        assert!(
-            log_line(at, 1, false, None, Duration::ZERO, Verdict::NoWindow)
-                .contains("answer=not shown")
-        );
+        assert!(log_line(at, 1, false, None, Verdict::NoWindow).contains("answer=not shown"));
     }
 }

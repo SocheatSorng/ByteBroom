@@ -96,10 +96,12 @@ pub fn recycle(policy: &Policy, targets: &[WinPath]) -> Outcome {
 /// done instead: the identity is compared on the handle that passed the policy, while every
 /// folder above the item is held (no folder can be swapped); a second handle that only reads
 /// attributes (so it never blocks the shell) stays on the checked file while the shell runs;
-/// afterwards that handle must show the checked file inside the drive's Recycle Bin. What is
-/// left: a same-folder rename in the instant before the shell opens the path would make the
-/// shell recycle another file. That file is then in the Recycle Bin (restorable), and the
-/// result says so.
+/// afterwards the item the shell reports it created in the bin (`IFileOperation`) must have the
+/// watched file's ID (security review S2). What is left: a rename in the instant before the
+/// shell opens the path would make the shell recycle another file. That file is then in the
+/// Recycle Bin (restorable), and the result warns. Folders, and files without a recorded
+/// identity, are checked by the policy only (review note N3): a folder swapped for a junction
+/// in that instant is recycled as the link itself, never followed.
 pub fn recycle_targets(policy: &Policy, targets: &[Target]) -> Outcome {
     recycle_with(policy, targets, &win::recycle::shell_recycle)
 }
@@ -109,7 +111,7 @@ pub fn recycle_targets(policy: &Policy, targets: &[Target]) -> Outcome {
 pub fn recycle_with(
     policy: &Policy,
     targets: &[Target],
-    shell: &dyn Fn(&WinPath) -> Result<(), i32>,
+    shell: &dyn Fn(&WinPath) -> Result<Option<WinPath>, i32>,
 ) -> Outcome {
     let mut out = Outcome::default();
     let mut facts: HashMap<char, BinFacts> = HashMap::new();
@@ -127,6 +129,28 @@ pub fn recycle_with(
     out
 }
 
+/// Is the item the shell reported (`created`) the file `watch` has open? It must be inside a
+/// Recycle Bin, open without following links, and have the same file ID; the watch handle must
+/// also still see its file there.
+fn same_file_recycled(watch: &win::Opened, created: Option<&WinPath>) -> bool {
+    created.is_some_and(|c| is_in_recycle_bin(c) && is_same_open_file(watch, c))
+}
+
+/// Is the object at `at` (opened without following it) the very file `watch` has open: same
+/// file ID, not a link, and where the watch handle now sees its file?
+pub fn is_same_open_file(watch: &win::Opened, at: &WinPath) -> bool {
+    let Ok(there) = win::open_no_follow(at, Access::Inspect) else {
+        return false;
+    };
+    let id = watch.file_id();
+    id.is_some()
+        && there.file_id() == id
+        && !there.resolved.is_reparse_point
+        && watch
+            .current_path()
+            .is_ok_and(|now| now == there.resolved.final_path)
+}
+
 /// True when `path` is inside the Recycle Bin of its own drive (`X:\$Recycle.Bin\...`). Pure.
 pub fn is_in_recycle_bin(path: &WinPath) -> bool {
     path.parts()
@@ -141,7 +165,7 @@ fn recycle_one(
     path: &WinPath,
     expect: Option<&FileIdentity>,
     depth: usize,
-    shell: &dyn Fn(&WinPath) -> Result<(), i32>,
+    shell: &dyn Fn(&WinPath) -> Result<Option<WinPath>, i32>,
     facts: &mut HashMap<char, BinFacts>,
     out: &mut Outcome,
 ) {
@@ -229,11 +253,15 @@ fn recycle_one(
 
     let before = win::recycle::bin_size(drive);
     match shell(&real) {
-        Ok(()) if !win::recycle::exists(&real) => {
+        Ok(created) if !win::recycle::exists(&real) => {
             let after = win::recycle::bin_size(drive);
-            // Where is the file we checked now? It must be the one in the Recycle Bin.
-            let now = watch.as_ref().map(win::Opened::current_path);
-            if now.is_some_and(|now| !matches!(&now, Ok(p) if is_in_recycle_bin(p))) {
+            // The item the shell says it put in the bin must be the very file we checked (same
+            // file ID as the watch handle), not just any file under `$Recycle.Bin`, which the
+            // user can write to (security review S2).
+            if watch
+                .as_ref()
+                .is_some_and(|w| !same_file_recycled(w, created.as_ref()))
+            {
                 out.removed.push(real.clone());
                 out.warnings.push(skip(
                     &real,
@@ -287,7 +315,7 @@ fn recycle_one(
                     .push(skip(path, SkipReason::Failed(e.to_string()))),
             }
         }
-        Ok(()) => out.skipped.push(skip(
+        Ok(_) => out.skipped.push(skip(
             path,
             SkipReason::Failed("the Recycle Bin did not take it".into()),
         )),

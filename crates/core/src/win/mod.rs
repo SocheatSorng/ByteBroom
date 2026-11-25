@@ -7,11 +7,13 @@
 #![allow(unsafe_code)]
 
 pub mod dir;
+mod fileop;
 pub mod hash;
 mod layout;
 pub mod locations;
 pub mod recycle;
 pub mod red;
+pub mod taskdialog;
 pub mod walk;
 
 use crate::paths::{PathError, WinPath};

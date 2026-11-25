@@ -339,16 +339,26 @@ fn clean_asks_in_rust_before_acting_on_amber_items() {
         ask < shown && shown < stop && stop < act,
         "the question comes before acting"
     );
-    // Phase 3's open bug: the dialog opens over the main window, its exact answer is read and
-    // logged, and the bool shortcut (which maps several answers to yes) is not used.
+    // Phase 3's open bug and review S1: ByteBroom's own task dialog, owned by the main window,
+    // every answer logged; the plugin's message dialog, whose default button confirms, is not
+    // used for this question.
     let confirm = read("src/confirm.rs");
+    assert!(confirm.contains("get_webview_window(\"main\")") && confirm.contains(".hwnd()"));
+    assert!(confirm.contains("taskdialog::ask("));
     assert!(
-        confirm.contains(".parent(&window)"),
-        "the dialog has a parent"
+        !confirm.contains(".message("),
+        "not the plugin's message dialog"
     );
-    assert!(confirm.contains(".blocking_show_with_result()"));
-    assert!(!confirm.contains(".blocking_show()"));
     assert!(confirm.contains("log("), "every answer is logged");
+    let td = read("../crates/core/src/win/taskdialog.rs");
+    assert!(
+        td.contains("nDefaultButton: IDCANCEL"),
+        "Cancel is the default button"
+    );
+    assert!(
+        td.contains("TDN_CREATED"),
+        "the clock starts when the dialog exists"
+    );
 }
 
 /// Owner's real test: the browser's own menu (Back, Refresh, Print) and reload keys wiped the

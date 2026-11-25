@@ -136,6 +136,106 @@ fn undo_refuses_a_forged_journal_line_pointing_outside_the_roots() {
     assert!(dest.join("a.tmp").exists(), "the moved file must stay");
 }
 
+/// Security review S3: a forged line whose "moved file" is a protected file with the same
+/// contents. Undo must not copy it into the cleaned folder nor delete it.
+#[test]
+fn undo_refuses_a_forged_moved_file_in_a_protected_area() {
+    let tree = FakeTree::new();
+    let dest = tree.base.join("dest");
+    fs::create_dir(&dest).unwrap();
+    let journal = tree.base.join("journal.log");
+    let pol = policy_for(&tree);
+    move_to(
+        &pol,
+        &[wp(&tree.root.join("junk").join("a.tmp"))],
+        &wp(&dest),
+        &journal_at(&journal),
+    );
+    let honest = read_journal(&journal).unwrap().remove(0);
+    // A "protected" file with exactly the moved file's contents, in the sentinel, which this
+    // layout marks as a protected area.
+    let protected = tree.sentinel.join("system.dll");
+    fs::copy(dest.join("a.tmp"), &protected).unwrap();
+    let real_root = open_no_follow(&wp(&tree.root), Access::Inspect)
+        .unwrap()
+        .resolved;
+    let real_sentinel = open_no_follow(&wp(&tree.sentinel), Access::Inspect)
+        .unwrap()
+        .resolved
+        .final_path;
+    let mut layout = system_layout();
+    layout.extra_denied.push(real_sentinel.clone());
+    let guarded = Policy::new(vec![real_root], layout).unwrap();
+    let forged = JournalEntry {
+        dest: real_sentinel.join("system.dll").unwrap(),
+        ..honest
+    };
+    let err = undo_move(&guarded, &forged).unwrap_err();
+    assert!(err.contains("protected"), "{err}");
+    assert!(protected.exists(), "the protected file must stay");
+    assert!(
+        !tree.root.join("junk").join("a.tmp").exists(),
+        "nothing copied back"
+    );
+}
+
+/// Security review S3: a line whose "moved file" path differs from where the file really is
+/// (here: reached through a junction) is refused.
+#[test]
+fn undo_refuses_a_moved_file_reached_through_a_link() {
+    let tree = FakeTree::new();
+    let pol = policy_for(&tree);
+    let dest = tree.base.join("dest");
+    fs::create_dir(&dest).unwrap();
+    let journal = tree.base.join("journal.log");
+    move_to(
+        &pol,
+        &[wp(&tree.root.join("junk").join("a.tmp"))],
+        &wp(&dest),
+        &journal_at(&journal),
+    );
+    let honest = read_journal(&journal).unwrap().remove(0);
+    let via = tree.base.join("via");
+    make_junction(&via, &dest);
+    let forged = JournalEntry {
+        dest: wp(&via.join("a.tmp")),
+        ..honest
+    };
+    let err = undo_move(&pol, &forged).unwrap_err();
+    assert!(err.contains("not where the journal says"), "{err}");
+    assert!(dest.join("a.tmp").exists());
+    fs::remove_dir(&via).unwrap();
+}
+
+/// Security review S3, the rule: the journal is user-writable, so only the unelevated undo in
+/// `relocate.rs` (which re-checks both ends) may read it. Elevated code (the phase 4 helper)
+/// never does. This sweep fails if any other source file starts reading it.
+#[test]
+fn only_the_move_module_reads_the_journal() {
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..");
+    let mut readers = Vec::new();
+    let mut stack = vec![repo.join("crates"), repo.join("src-tauri").join("src")];
+    while let Some(dir) = stack.pop() {
+        for entry in fs::read_dir(&dir).unwrap().flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                if !p.ends_with("tests") && !p.ends_with("target") {
+                    stack.push(p);
+                }
+            } else if p.extension().is_some_and(|e| e == "rs") {
+                let text = fs::read_to_string(&p).unwrap();
+                if text.contains("read_journal(") || text.contains(".entries()") {
+                    readers.push(p.file_name().unwrap().to_string_lossy().into_owned());
+                }
+            }
+        }
+    }
+    readers.sort();
+    assert_eq!(readers, vec!["relocate.rs".to_string()], "{readers:?}");
+}
+
 #[test]
 fn undo_refuses_an_original_folder_that_is_a_junction() {
     let tree = FakeTree::new();

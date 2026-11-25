@@ -27,7 +27,7 @@ fn main() -> tauri::Result<()> {
                 let question = "1 of your own file (66.5 MB) will be cleaned as the preview \
                                 showed:\n\n- 1 sent to the Recycle Bin\n\nD:\\Example\\setup.exe\n"
                     .to_string();
-                let v = confirm::ask(&handle, question, 1, base.as_ref());
+                let v = confirm::ask(&handle, &question, 1, base.as_ref());
                 eprintln!("verdict: {v:?}");
                 handle.exit(0);
             });

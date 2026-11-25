@@ -62,9 +62,9 @@ and files ending in `.kdbx`, `.kdb`, `.psafe3`, `.1pif`, `.agilekeychain`, `.gpg
    also chosen).
 4. **Confirm.** Green items need one confirm. Amber items need a second confirm that lists every
    one of them. "Clean now" stays off until both are ticked. When amber items are chosen, Windows'
-   own dialog "ByteBroom: clean your own files?" then opens over the window: only **Clean them**
-   goes ahead, and an answer given in under a second counts as a stray click, so nothing is
-   cleaned. Each answer is logged (counts only, no file names) in `ByteBroom\bytebroom.log` in your
+   own dialog "ByteBroom: clean your own files?" then opens over the window. Cancel is its
+   default button, so Enter cancels. Only **Clean them** goes ahead, and an answer given in under
+   a second counts as a stray click, so nothing is cleaned. Each answer is logged (counts only, no file names) in `ByteBroom\bytebroom.log` in your
    local app data folder.
 5. **Clean.** Right before acting, each item is checked again: it must still be the same file,
    unchanged since the scan; a duplicate must still match its kept copy; and a temp item must not

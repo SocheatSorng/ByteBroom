@@ -13,10 +13,7 @@ use windows_sys::Win32::System::Registry::{
     HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_RT_REG_DWORD, RegGetValueW,
 };
 use windows_sys::Win32::System::WindowsProgramming::DRIVE_FIXED;
-use windows_sys::Win32::UI::Shell::{
-    FO_DELETE, FOF_ALLOWUNDO, FOF_NO_UI, SHFILEOPSTRUCTW, SHFileOperationW, SHQUERYRBINFO,
-    SHQueryRecycleBinW,
-};
+use windows_sys::Win32::UI::Shell::{SHQUERYRBINFO, SHQueryRecycleBinW};
 
 fn wide(text: &str) -> Vec<u16> {
     OsStr::new(text).encode_wide().chain(Some(0)).collect()
@@ -139,28 +136,11 @@ pub fn bin_size(letter: char) -> Option<u64> {
     (hr == 0).then(|| u64::try_from(info.i64Size).unwrap_or(0))
 }
 
-/// Ask the shell to move `path` to the Recycle Bin, with no UI. `Err` carries the shell's code.
-pub fn shell_recycle(path: &WinPath) -> Result<(), i32> {
-    // pFrom is a list ending with an empty string: the path, NUL, then a second NUL.
-    let mut from: Vec<u16> = OsStr::new(&path.to_string()).encode_wide().collect();
-    from.extend([0, 0]);
-    let mut op = SHFILEOPSTRUCTW {
-        hwnd: std::ptr::null_mut(),
-        wFunc: FO_DELETE,
-        pFrom: from.as_ptr(),
-        pTo: std::ptr::null(),
-        fFlags: (FOF_ALLOWUNDO | FOF_NO_UI) as u16,
-        fAnyOperationsAborted: 0,
-        hNameMappings: std::ptr::null_mut(),
-        lpszProgressTitle: std::ptr::null(),
-    };
-    // SAFETY: `op` is fully initialised and `from` is double-NUL-terminated and outlives the call.
-    let code = unsafe { SHFileOperationW(&mut op) };
-    if code == 0 && op.fAnyOperationsAborted == 0 {
-        Ok(())
-    } else {
-        Err(code)
-    }
+/// Ask the shell to move `path` to the Recycle Bin, with no UI. `Ok` carries the path of the
+/// item the shell created in the bin, when it reports one (security review S2); `Err` carries
+/// the shell's code.
+pub fn shell_recycle(path: &WinPath) -> Result<Option<WinPath>, i32> {
+    super::fileop::recycle_reporting(path)
 }
 
 /// Does anything (file, folder or link) exist at `path`? Does not follow links.

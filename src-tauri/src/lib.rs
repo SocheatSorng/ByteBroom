@@ -160,7 +160,13 @@ async fn clean(
         .map_err(|e| CommandError::new(&e))?;
     if let Some(question) = amber_question(&ready) {
         let items = ready.preview.confirm_amber.len();
-        let verdict = confirm::ask(&app, question, items, local_app_data(&layout.0).as_ref());
+        let base = local_app_data(&layout.0);
+        // The dialog blocks until answered, so it runs off the async runtime.
+        let verdict = tauri::async_runtime::spawn_blocking(move || {
+            confirm::ask(&app, &question, items, base.as_ref())
+        })
+        .await
+        .unwrap_or(confirm::Verdict::Unavailable);
         if let Some(why) = confirm::refusal(verdict) {
             guard.nothing_done();
             return Err(CommandError::new(why));

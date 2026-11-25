@@ -132,7 +132,19 @@ fn real_bin_recycles_one_dummy_file() {
     write_file(&file, &[b'b'; 4096]);
     let before = snapshot(&tree.sentinel, "before", &tree.base);
 
-    let out = recycle(&pol, &[wp(&file)]);
+    // With the file's identity, so the shell's reported bin item must be this very file
+    // (security review S2): a warning here would mean that check fails on a real bin.
+    let o = open_no_follow(&wp(&file), Access::Inspect).unwrap();
+    let target = bytebroom_core::engine::Target {
+        path: o.resolved.final_path.clone(),
+        expect: Some(bytebroom_core::scan::FileIdentity {
+            id: o.file_id().unwrap(),
+            len: o.size,
+            modified: o.modified,
+        }),
+    };
+    drop(o);
+    let out = bytebroom_core::recycle::recycle_targets(&pol, &[target]);
 
     assert!(out.skipped.is_empty(), "{:?}", out.skipped);
     assert!(out.warnings.is_empty(), "{:?}", out.warnings);

@@ -40,8 +40,8 @@ Commit `7bca314`, all checks and the release build pass:
   - the gap left over is documented in `recycle_targets`.
 - **Security note 7:** the journal's folder and file, and the log, are opened from held handles
   without following links. A junction or a hard link in their place is refused.
-- **Security review of these fixes** (2026-11-25): no must-fix. Should-fixes, to be fixed with
-  tests before task 1:
+- **Security review of these fixes** (2026-11-25): no must-fix. The should-fixes were fixed with
+  tests on 2026-11-25 (see "Review fixes" below). They were:
   - **S1:** "Clean them" is still the default button, and the one-second timer starts before the
     dialog is really on screen. Fix: call `TaskDialogIndirect` ourselves (in `core::win`), with
     Cancel as the default and the timer started when the dialog is created.
@@ -55,6 +55,34 @@ Commit `7bca314`, all checks and the release build pass:
     - N3: document that folders and identity-less items are checked by the policy only;
     - N4: once elevated, UIPI also blocks fake clicks from unelevated programs;
     - N5: rotate `bytebroom.log`.
+
+### Review fixes (2026-11-25)
+
+- **S1:**
+  - `core::win::taskdialog`, ByteBroom's own task dialog: Cancel is the default button, and Esc
+    and the close box cancel;
+  - it is owned by the main window, and the clock starts at `TDN_CREATED`;
+  - `TaskDialogIndirect` is looked up at run time, so programs without the manifest start and
+    report it "unavailable", which never confirms.
+
+  Harness: Enter on the dialog gave `Cancelled`, logged with `parent=main window`.
+- **S2:**
+  - recycling goes through `IFileOperation` (`core::win::fileop`), whose `PostDeleteItem`
+    reports the item created in the bin;
+  - that item must have the checked file's file ID (`is_same_open_file`), or the result warns.
+
+  Tested with stand-in shells, the file-ID comparison on temp files, and a missing item. The
+  real call is proven only by the owner's opt-in one-file test, which now passes the file's
+  identity.
+- **S3:**
+  - the rule is in `docs/spec.md` (rule 5), and a test sweeps the source for journal readers;
+  - `undo_move` refuses a "moved file" that is not exactly at the journalled path, is in a
+    protected area, or has other names.
+- **N5:** `bytebroom.log` starts again above 256 KB, keeping one `.old` copy, renamed inside
+  the held folder without following links.
+- **Still notes:**
+  - N1: a name differing only in case refuses, failing safe;
+  - N4: UIPI blocks fake clicks once elevated.
 
 ## Design (proposed; the decisions below choose between options)
 

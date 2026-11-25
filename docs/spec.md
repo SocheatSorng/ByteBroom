@@ -101,7 +101,12 @@ pub fn check_target(target: &ResolvedPath, policy: &Policy) -> Result<Tier, Refu
    drives). The UI warns that recycling on the same drive frees no space until the bin is emptied.
 5. **Move = copy, verify, then delete.** Each file is copied to the destination and checked by size and
    SHA-256 before the source is removed. Every move is written to a journal in `%LOCALAPPDATA%\ByteBroom`,
-   so it can be undone.
+   so it can be undone. The journal is user-writable, so its entries are untrusted:
+   - only the unelevated undo reads it (a test sweeps the source for any other reader);
+   - undo re-checks both ends: the original folder against the policy, and the moved file at
+     exactly the journalled path, off the hard floor, with one name and the journalled hash.
+
+   The journal's folder and file are opened without following links.
 6. **Files in use** are skipped and reported, never forced.
 7. **Honest accounting.** "Space freed" counts only bytes that really come back. A hard link with other
    names left, or a file sent to a Recycle Bin on the same drive, counts as 0.

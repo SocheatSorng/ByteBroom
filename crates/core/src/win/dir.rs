@@ -335,6 +335,73 @@ impl LockedDir {
         })
     }
 
+    /// Rename the file `from` in this folder to `to` in this same folder, replacing a file of
+    /// that name. Both names are relative to the held handle; `from` is opened without following
+    /// a link and must be a plain file with no other names (used to start a new log).
+    pub fn replace_name(&self, from: &str, to: &str) -> io::Result<()> {
+        use windows_sys::Wdk::Storage::FileSystem::{
+            FILE_RENAME_INFORMATION, FileRenameInformation, NtSetInformationFile,
+        };
+        let bad = |e: CreateError| io::Error::other(e.to_string());
+        self.path
+            .join(to)
+            .map_err(|e| io::Error::other(e.to_string()))?;
+        let (status, raw) = self
+            .raw_open(
+                from,
+                DELETE | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+                FILE_SHARE_READ,
+                FILE_OPEN,
+                FILE_NON_DIRECTORY_FILE,
+            )
+            .map_err(bad)?;
+        if status < 0 || raw.is_null() {
+            // SAFETY: plain conversion of a status code.
+            let code = unsafe { RtlNtStatusToDosErrorNoTeb(status) };
+            return Err(io::Error::from_raw_os_error(code as i32));
+        }
+        // SAFETY: the open succeeded, so `raw` is a handle we own.
+        let handle = unsafe { OwnedHandle::from_raw_handle(raw) };
+        let facts = info(&handle)?;
+        if facts.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 || facts.nNumberOfLinks != 1 {
+            return Err(io::Error::other("not a plain file with one name"));
+        }
+        let name: Vec<u16> = to.encode_utf16().collect();
+        let name_bytes = name.len() * 2;
+        let size = size_of::<FILE_RENAME_INFORMATION>() + name_bytes;
+        // u64 storage keeps the struct aligned.
+        let mut buf = vec![0u64; size.div_ceil(8)];
+        let info_ptr = buf.as_mut_ptr().cast::<FILE_RENAME_INFORMATION>();
+        let mut io_status = IO_STATUS_BLOCK::default();
+        // The native call, because only it takes the new name relative to the held folder
+        // (the Win32 wrapper refuses a root directory). SAFETY: `buf` is large enough for the
+        // struct plus the name (written from FileName on) and aligned for it; every field is
+        // written before the call reads it; both handles are open.
+        let status = unsafe {
+            (*info_ptr).Anonymous.ReplaceIfExists = true;
+            (*info_ptr).RootDirectory = self.handle.as_raw_handle();
+            (*info_ptr).FileNameLength = name_bytes as u32;
+            std::ptr::copy_nonoverlapping(
+                name.as_ptr(),
+                (&raw mut (*info_ptr).FileName).cast::<u16>(),
+                name.len(),
+            );
+            NtSetInformationFile(
+                handle.as_raw_handle(),
+                &mut io_status,
+                info_ptr.cast(),
+                size as u32,
+                FileRenameInformation,
+            )
+        };
+        if status < 0 {
+            // SAFETY: plain conversion of a status code.
+            let code = unsafe { RtlNtStatusToDosErrorNoTeb(status) };
+            return Err(io::Error::from_raw_os_error(code as i32));
+        }
+        Ok(())
+    }
+
     /// Open the file `name` in this folder for appending (and reading back), creating it if
     /// needed. A link in its place is refused, and so is a file with other hard links, which
     /// could be another file's contents under this name.
