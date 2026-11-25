@@ -26,6 +26,16 @@ pub const DENIED_AT_DRIVE_ROOT: [&str; 14] = [
     "Config.msi",
 ];
 
+/// Folders at the root of every drive **other than** the running Windows' drive that are never
+/// acted on, whole subtrees: another Windows installation's own folders. (`Windows.old` is left
+/// out so the red tier can still measure it; nothing ever acts on it as a file.)
+pub const SYSTEM_FOLDERS_ON_OTHER_DRIVES: [&str; 4] = [
+    "Windows",
+    "Program Files",
+    "Program Files (x86)",
+    "ProgramData",
+];
+
 /// Folders under **every** profile root that are never acted on, whole subtrees: Windows' key
 /// and credential stores (losing DPAPI's `Protect` keys loses every secret they encrypt), the
 /// per-user Startup folder (a file placed there runs at sign-in), and SSH/GPG keys. Paths assume
@@ -148,6 +158,16 @@ pub fn denied_reason(path: &WinPath, layout: &SystemLayout) -> Option<String> {
             .any(|name| first.eq_ignore_ascii_case(name))
     {
         return Some(format!("{first} at the drive root"));
+    }
+    // Another Windows (dual boot, an old disk) keeps its system folders at its own drive's root,
+    // which the running Windows' layout knows nothing about.
+    if path.drive() != layout.system_root.drive()
+        && let Some(first) = path.parts().first()
+        && SYSTEM_FOLDERS_ON_OTHER_DRIVES
+            .iter()
+            .any(|name| first.eq_ignore_ascii_case(name))
+    {
+        return Some(format!("{first} on another drive"));
     }
     if path.is_at_or_inside_ignore_case(&layout.system_root) {
         let in_temp = layout.system_temp().is_some_and(|temp| {
@@ -503,6 +523,32 @@ mod tests {
             denied_reason(&p("C:\\ProgramData\\MicrosoftEdgeCache"), &layout()),
             None
         );
+    }
+
+    #[test]
+    fn another_windows_on_another_drive_is_protected() {
+        for bad in [
+            "D:\\Windows\\System32\\x.dll",
+            "D:\\windows",
+            "E:\\Program Files\\App\\a.exe",
+            "D:\\Program Files (x86)\\x",
+            "D:\\ProgramData\\Microsoft\\x",
+        ] {
+            assert!(denied_reason(&p(bad), &layout()).is_some(), "{bad}");
+        }
+        // The running Windows' drive keeps its own rules: ProgramData's apps are not floor.
+        assert_eq!(
+            denied_reason(&p("C:\\ProgramData\\SomeApp\\cache"), &layout()),
+            None
+        );
+        // Ordinary folders on other drives, and Windows.old (measured by the red tier), are not.
+        for ok in [
+            "D:\\Games\\big.iso",
+            "D:\\Windows.old\\x",
+            "D:\\Data\\Windows\\x",
+        ] {
+            assert_eq!(denied_reason(&p(ok), &layout()), None, "{ok}");
+        }
     }
 
     #[test]
