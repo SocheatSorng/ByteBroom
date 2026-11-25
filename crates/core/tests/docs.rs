@@ -76,6 +76,8 @@ fn files_named_in_the_docs_exist() {
         "docs/phase1-plan.md",
         "docs/phase2-plan.md",
         "docs/phase3-plan.md",
+        "docs/phase4-plan.md",
+        "docs/recovery.md",
         "crates/scan/Cargo.toml",
         "build.ps1",
         "src-tauri/Cargo.toml",
@@ -248,6 +250,44 @@ fn the_scan_tool_the_readme_names_exists() {
             "cargo test --release -p bytebroom-core --test speed -- --ignored --nocapture"
         )
     );
+}
+
+/// Phase 4, task 3: the recovery recipe covers every helper action, its undo commands match
+/// the owner's decisions, and the files and messages it names exist.
+#[test]
+fn the_recovery_recipe_matches_the_helper_and_the_plan() {
+    use bytebroom_core::admin::AdminAction;
+    let recipe = read("docs/recovery.md");
+    let plan = read("docs/phase4-plan.md");
+    for action in AdminAction::ALL {
+        if action == AdminAction::Noop {
+            continue;
+        }
+        assert!(
+            recipe.contains(&format!("(`{}`)", action.arg())),
+            "docs/recovery.md lacks the {action:?} action"
+        );
+    }
+    // The undo command is the one decision 4 names.
+    assert!(recipe.contains("`powercfg /hibernate on`"));
+    assert!(plan.contains("Undo: `powercfg /hibernate on`"));
+    // The helper's own words and files.
+    assert!(recipe.contains("\"ByteBroom: restore point on request\""));
+    assert!(read("crates/core/src/admin.rs").contains("\"ByteBroom: restore point on request\""));
+    assert!(recipe.contains("`./tools/uninstall-helper.ps1`"));
+    assert!(repo_root().join("tools/uninstall-helper.ps1").exists());
+    assert!(recipe.contains(r"`Program Files\ByteBroom`"));
+    // Every red action the owner chose has a row (decision 3).
+    for row in [
+        "| Hibernation off |",
+        "| Delivery Optimization cache |",
+        "| Empty the Recycle Bin |",
+    ] {
+        assert!(recipe.contains(row), "docs/recovery.md lacks {row}");
+    }
+    // The recipe never tells the owner to delete restore points or reset the component store.
+    assert!(!recipe.contains("vssadmin delete"));
+    assert!(!recipe.contains("/ResetBase /"));
 }
 
 /// Phase 4: the elevated helper the README describes is built, installed and removed by the

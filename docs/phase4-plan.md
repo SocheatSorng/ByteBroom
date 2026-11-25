@@ -403,10 +403,25 @@ Each task: code → tests → fmt + clippy → full tests → build → commit w
       accepts this), and the window's text will say so in task 5.
     - **Same-day second run:** after a skip, END is called on an already-complete point. The
       owner's check runs the action twice on the same day to prove that still answers `Done`.
-- [ ] **3. Recovery recipe** in `docs/recovery.md`:
+- [x] **3. Recovery recipe** in `docs/recovery.md` (2026-11-25):
   - how to undo each action (for example `powercfg /hibernate on`);
   - how to roll back with System Restore, including from Windows' recovery screen;
   - what can't be undone (Windows.old, old restore points).
+
+  Done:
+  - **Sources:** Microsoft Support's "Use System Restore", "Windows Recovery Environment" and
+    "Recovery options in Windows" pages; anything they don't say is marked "not stated" (for
+    example, whether a restore can be undone).
+  - **Also in it:** keep C: free (Windows deleted every restore point when it filled), check
+    the point in `rstrui.exe` before acting, and the known gaps (a point up to 24 hours old;
+    Windows can drop a confirmed point later).
+  - **On the owner's PC** (read-only): BitLocker is off for C:, so Windows RE needs no
+    recovery key.
+  - **Docs-drift test:** every helper action but the no-op has a row, the undo command matches
+    decision 4, the restore point's name matches the code, every red action from decision 3
+    has a row, and the recipe never suggests deleting restore points or `/ResetBase`.
+  - Task 4 adds the hibernation and Delivery Optimization actions to the helper; the test then
+    requires their rows by action name too.
 - [ ] **4. Red actions, one per commit** (the set from decision 3), each with:
   - its plan table test;
   - a recorded-runner test;
