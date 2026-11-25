@@ -247,13 +247,16 @@
     };
     if (details.open) fill();
     details.addEventListener("toggle", () => {
-      if (details.open) {
-        state.open.add(rule);
-        fill();
-      } else {
-        state.open.delete(rule);
-        rows.replaceChildren();
+      if (details.open) state.open.add(rule);
+      else state.open.delete(rule);
+      // The list may have been redrawn (a scan update) between the click and this event: then
+      // this element is gone, so redraw to show the change on the one that replaced it.
+      if (!details.isConnected) {
+        render();
+        return;
       }
+      if (details.open) fill();
+      else rows.replaceChildren();
     });
     return details;
   }
