@@ -620,4 +620,24 @@ checks and the build on `main` again.
 
 ## Results
 
-(to be filled in)
+Built and checked on 2026-11-25. Waiting only for the fresh restore point check (after 19:23 on
+2026-11-26), then the merge.
+
+- **Helper:**
+  - `bytebroom-admin.exe` in `Program Files\ByteBroom`;
+  - actions `noop`, `restore-point`, `hibernation-off` and `delivery-optimization-cache`;
+  - each change runs only with a listed restore point (a `PointInPlace` proof);
+  - a fixed environment, System32 programs only.
+- **Found by the owner's checks and fixed:**
+  - a fail-open: `Done` with no restore point, because the snapshot was taken after the helper
+    exited. Now the helper waits until Windows lists the point;
+  - "did not empty" for an already empty Recycle Bin.
+- **Owner checks passed:**
+  - the UAC round trip;
+  - a restore point reused within 24 hours;
+  - the Recycle Bin dialog (Cancel, then Empty it);
+  - hibernation off, then on again with the recipe's command;
+  - the Delivery Optimization cache cleared.
+- **Reviews:** four security reviews (tasks 1 and 2, the restore point fix, task 8), with every
+  should-fix fixed with tests; a UI and accessibility pass.
+- **Next:** `docs/phase5-plan.md`.
