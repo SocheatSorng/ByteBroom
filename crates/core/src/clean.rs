@@ -26,6 +26,14 @@ pub enum SelectError {
     RedTier(WinPath),
     /// A finding's item is not strictly inside its own root (never produced by the scanner).
     NotInsideRoot(WinPath),
+    /// A duplicate was chosen together with the copy that is kept (or a folder holding it), so
+    /// no copy would be left.
+    LastCopy {
+        /// The duplicate chosen.
+        copy: WinPath,
+        /// The kept copy, also chosen.
+        kept: WinPath,
+    },
 }
 
 impl fmt::Display for SelectError {
@@ -34,6 +42,10 @@ impl fmt::Display for SelectError {
             Self::Unknown(n) => write!(f, "item {n} is not in the scan"),
             Self::RedTier(p) => write!(f, "{p} is a Windows area ByteBroom does not clean"),
             Self::NotInsideRoot(p) => write!(f, "{p} is not inside its rule's folder"),
+            Self::LastCopy { copy, kept } => write!(
+                f,
+                "{copy} and its kept copy {kept} were both chosen; no copy would be left"
+            ),
         }
     }
 }
@@ -66,6 +78,20 @@ pub fn plan_clean(findings: &[Finding], chosen: &[usize]) -> Result<CleanPlan, S
         }
         if !picked.iter().any(|p| p.path.eq_ignore_case(&f.path)) {
             picked.push(f);
+        }
+    }
+    // A duplicate goes only if the copy it names as kept stays: not chosen itself (under any
+    // rule, e.g. as a large file or old installer) and not inside a chosen folder.
+    for f in &picked {
+        if let Some(kept) = &f.duplicate_of
+            && picked
+                .iter()
+                .any(|o| kept.is_at_or_inside_ignore_case(&o.path))
+        {
+            return Err(SelectError::LastCopy {
+                copy: f.path.clone(),
+                kept: kept.clone(),
+            });
         }
     }
     // An item inside another chosen item is handled (and counted) by the outer one.
@@ -237,6 +263,46 @@ mod tests {
                 5,
             ),
         ]
+    }
+
+    /// Security review S1: the kept copy of a duplicate is also an old installer (index 3) here.
+    fn with_duplicate() -> Vec<Finding> {
+        let mut f = sample();
+        let mut dup = finding(
+            "duplicates",
+            "C:\\Users\\Ann\\Documents",
+            "C:\\Users\\Ann\\Documents\\s.exe",
+            5,
+        );
+        dup.duplicate_of = Some(p("C:\\Users\\Ann\\Downloads\\s.exe"));
+        f.push(dup); // index 5
+        f.push(finding(
+            "user-temp",
+            "C:\\Users\\Ann",
+            "C:\\Users\\Ann\\Downloads",
+            5,
+        )); // index 6: a folder holding the kept copy
+        f
+    }
+
+    #[test]
+    fn a_duplicate_and_its_kept_copy_can_not_both_go() {
+        let f = with_duplicate();
+        // The duplicate alone is fine; so is the kept copy alone.
+        assert!(plan_clean(&f, &[5]).is_ok());
+        assert!(plan_clean(&f, &[3]).is_ok());
+        for both in [[5, 3], [3, 5], [4, 5], [5, 6]] {
+            assert!(
+                matches!(plan_clean(&f, &both), Err(SelectError::LastCopy { .. })),
+                "{both:?}"
+            );
+        }
+        let message = SelectError::LastCopy {
+            copy: p("C:\\a"),
+            kept: p("C:\\b"),
+        }
+        .to_string();
+        assert!(message.contains("no copy would be left"));
     }
 
     #[test]
