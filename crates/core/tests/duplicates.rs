@@ -105,6 +105,17 @@ fn duplicates_home() -> Home {
         &x,
         200 * DAY,
     );
+    // Another profile's AppData copied from an old PC: also never searched (security review S5).
+    put(
+        &h.home
+            .join("OldPC")
+            .join("Users")
+            .join("Bob")
+            .join("AppData")
+            .join("x.bin"),
+        &x,
+        300 * DAY,
+    );
     put(
         &h.home.join("code").join("node_modules").join("x.bin"),
         &x,
@@ -265,6 +276,16 @@ fn large_files_start_at_the_owners_threshold_and_are_listed_once() {
         LARGE_FILE_BYTES - 1,
     );
     sparse(&h.home.join("Videos").join("id.pem"), LARGE_FILE_BYTES); // never listed
+    // Security review S5: an app's disk image in AppData is never a large-file finding.
+    sparse(
+        &h.home
+            .join("AppData")
+            .join("Local")
+            .join("Packages")
+            .join("Wsl")
+            .join("ext4.vhdx"),
+        LARGE_FILE_BYTES * 2,
+    );
     let found = h.findings("large-files");
     let names: Vec<String> = found.iter().map(|f| h.rel(&f.path)).collect();
     assert_eq!(names, vec!["Downloads\\big.iso".to_string()]);

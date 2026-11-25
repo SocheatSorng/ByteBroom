@@ -8,10 +8,11 @@
 //! the expected place; a link anywhere on the way means the folder is not scanned. The walker
 //! already refuses links, "never listed" names and the hard floor below each root.
 //!
-//! Large files and duplicates share one search walk of the profile and the other drives.
-//! Duplicates are hashed only after their sizes match, never for cloud placeholders (reading one
-//! would download it), and never in AppData, `.git` or build folders, which are full of identical
-//! files their apps need. The red tier (task 6) is not produced here yet.
+//! Large files and duplicates share one search walk of the profile and the other drives. It never
+//! enters an `AppData` folder (app disk images and databases live there), and never offers a cloud
+//! placeholder. Duplicates are hashed only after their sizes match, never for cloud placeholders
+//! (reading one would download it), and never in `.git` or build folders, which are full of
+//! identical files their apps need. The red tier is measured separately (`win::red`).
 
 use crate::duplicates::{Candidate, find_duplicates};
 use crate::locations::Locations;
@@ -430,26 +431,31 @@ impl Scanner<'_> {
             return found.clone();
         }
         let mut found = Vec::new();
-        let app_data = self
-            .at
-            .profile
-            .as_ref()
-            .and_then(|p| p.join("AppData").ok());
         for area in self.area_roots(areas) {
             let Some(area) = self.search_root(&area) else {
                 continue;
             };
             self.walk(&area, None, |item| {
-                let Item::File(f) = item else {
-                    return Step::Enter;
+                let f = match item {
+                    // App data (any profile's, on any drive) holds disk images and databases
+                    // whose apps break without them (WSL's ext4.vhdx, Docker's data). Their
+                    // caches are offered by the green and amber rules instead.
+                    Item::Folder { path, .. }
+                        if path
+                            .parts()
+                            .last()
+                            .is_some_and(|n| n.eq_ignore_ascii_case("AppData")) =>
+                    {
+                        return Step::Skip;
+                    }
+                    Item::File(f) => f,
+                    _ => return Step::Enter,
                 };
-                let large = f.len >= LARGE_FILE_BYTES;
-                let duplicate_candidate = f.len >= DUPLICATE_MIN_BYTES
-                    && !f.cloud
-                    && !app_data
-                        .as_ref()
-                        .is_some_and(|a| f.path.is_at_or_inside_ignore_case(a))
-                    && !in_build_or_git_folder(&f.path);
+                // A cloud placeholder's bytes may not be on this disk, and the engine never acts
+                // on placeholders (they are reparse points): not offered as a large file.
+                let large = f.len >= LARGE_FILE_BYTES && !f.cloud;
+                let duplicate_candidate =
+                    f.len >= DUPLICATE_MIN_BYTES && !f.cloud && !in_build_or_git_folder(&f.path);
                 if !f.repeat && (large || duplicate_candidate) {
                     found.push(SearchFile {
                         path: f.path.clone(),
