@@ -97,6 +97,11 @@ fn the_release_binary_links_no_engine_functions_and_imports_nothing_that_acts() 
         "SetEndOfFile",
         "NtCreateFile",
         "NtSetInformationFile",
+        "CreateDirectoryW",
+        "CreateHardLinkW",
+        "CreateSymbolicLinkW",
+        "SetFileAttributesW",
+        "SetFileTime",
     ] {
         assert!(!contains(&exe, call), "the scan tool imports {call}");
     }
@@ -153,6 +158,66 @@ fn the_scan_tool_source_names_nothing_that_acts_or_writes_files() {
             "write",
             "create",
             "command",
+        ] {
+            assert!(
+                !code.contains(banned),
+                "{} names `{banned}`",
+                path.display()
+            );
+        }
+    }
+}
+
+/// Security review S7: the core modules the scan runs must not write files or act either. `WriteFile`
+/// can't be banned from the import table (printing to the terminal uses it), so a file write or a
+/// log added to the scanner later would only be caught here. The list is narrower than the tool's
+/// own (the walker copies bytes in memory with `copy_nonoverlapping`, for example).
+#[test]
+fn the_scanner_modules_name_nothing_that_acts_or_writes_files() {
+    let core = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("core")
+        .join("src");
+    let modules = [
+        core.join("scan.rs"),
+        core.join("walk.rs"),
+        core.join("red.rs"),
+        core.join("locations.rs"),
+        core.join("duplicates.rs"),
+        core.join("summary.rs"),
+        core.join("rules.rs"),
+        core.join("win").join("walk.rs"),
+        core.join("win").join("red.rs"),
+        core.join("win").join("locations.rs"),
+        core.join("win").join("hash.rs"),
+    ];
+    for path in modules {
+        let code = code_only(&fs::read_to_string(&path).unwrap()).to_lowercase();
+        for banned in [
+            "fs::write",
+            "fs::create",
+            "fs::remove",
+            "fs::rename",
+            "fs::copy",
+            "fs::hard_link",
+            "file::create",
+            "openoptions",
+            "write_all",
+            "writeln!",
+            "engine::",
+            "recycle::",
+            "relocate::",
+            "clean::",
+            "dispose",
+            "delete_by_handle",
+            "access::delete",
+            "access::move",
+            "setfileinformation",
+            "shfileoperation",
+            "create_dir",
+            "remove_dir",
+            "remove_file",
+            "lock_dir",
         ] {
             assert!(
                 !code.contains(banned),
