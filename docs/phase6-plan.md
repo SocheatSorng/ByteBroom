@@ -345,11 +345,19 @@ Built 2026-11-26, version 1.0.0. `./check.ps1` and `./build.ps1` pass.
   - every author and committer uses the noreply email;
   - no personal paths, names or keys in tracked files or history;
   - no history rewrite needed.
+- **Done since:** the Esc branch is merged; the owner backed up the key.
+- **Task 9 part A (2026-11-26, local unsigned installer), passed:**
+  - the folder page refused `C:\Tools\ByteBroom` and accepted `Program Files\ByteBroom`;
+  - `verify-install.ps1` printed only OK lines, and the installed programs equal the copies packed
+    in the installer (SHA-256, read with 7-Zip);
+  - with no release published, there was no update banner, and the log says
+    `update check: failed (offline or no release)`;
+  - uninstalling removed the folder and Windows' uninstall record, and kept `%LOCALAPPDATA%\ByteBroom`.
 - **Open:**
-  - merge the Esc branch (owner's decision);
-  - the owner's backup of the key;
+  - task 9 part A, the small clean: the log has no `amber-confirm` line from the installed app yet.
+    The owner will repeat it with the task 0 check (steps 2 to 7), on a fresh install;
   - task 8 (push, green workflows);
-  - task 9 (owner check).
+  - task 9 part B (install from a published release, update to a newer one).
 - **Additions to task 9:**
   - pick another folder on the installer's folder page, and expect **Next** to stay greyed out;
   - run `./tools/verify-install.ps1` after installing;
