@@ -385,6 +385,13 @@ Each task: code → tests → fmt + clippy → full tests → build → commit w
         nothing was done;
       - **the row's number:** a returned row counts only if its `SequenceNumber` is the one
         asked for (`row_matches`), not just because the query's filter let it through.
+    - **Owner's rerun (2026-11-25, 21:06): reuse path passes.** The reinstalled helper
+      (hash matches the build) answered `Done`. System Restore logged event 8216 ("Skipping
+      creation… as there is a restore point available") for the helper, so it reused the 19:23
+      point, which `confirm_listed` found listed. No VSS error followed.
+    - **Still to prove:** a fresh point (no point in the last 24 hours) is kept and listed, and
+      the helper answers `Done` only after that. The owner reruns the check after 19:23 on
+      2026-11-26.
     - **Known gap:** Windows can still drop a confirmed point later, e.g. when C: fills up
       (volsnap event 36). The recovery recipe (task 3) says so.
     - Also seen: volsnap event 36 at 16:20, when C: was full. Windows dropped every earlier
