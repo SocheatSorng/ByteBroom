@@ -56,6 +56,14 @@ impl Home {
         Self { dir, home }
     }
 
+    /// The real layout with the fake profile listed, as Windows lists the real one (so the
+    /// profile root is on the floor as a delete target, exactly as on the owner's PC).
+    fn layout(&self) -> bytebroom_core::policy::SystemLayout {
+        let mut layout = system_layout();
+        layout.profile_roots.push(real(&self.home));
+        layout
+    }
+
     fn locations(&self) -> Locations {
         Locations {
             profile: Some(real(&self.home)),
@@ -75,7 +83,7 @@ impl Home {
             now: SystemTime::now(),
             cancel: None,
         };
-        scan(&self.locations(), &system_layout(), &opts)
+        scan(&self.locations(), &self.layout(), &opts)
             .findings
             .into_iter()
             .filter(|f| f.rule.id == rule)

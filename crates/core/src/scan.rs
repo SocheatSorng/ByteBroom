@@ -181,6 +181,22 @@ impl Scanner<'_> {
         ok.then_some(o.resolved.final_path)
     }
 
+    /// Where a read-only search may start: a drive root, or a real folder at exactly that place
+    /// (not a link here or on the way). Unlike [`Self::real_folder`] this does not apply the hard
+    /// floor to the area itself, because the profile root is on the floor as a delete *target*
+    /// yet is exactly where searches start. Areas come from the trusted [`Locations`], findings
+    /// inside get their own roots, and the walker still refuses the floor below the area.
+    fn search_root(&self, area: &WinPath) -> Option<WinPath> {
+        if area.is_drive_root() {
+            return Some(area.clone());
+        }
+        let o = open_no_follow(area, Access::Inspect).ok()?;
+        let ok = !o.resolved.is_reparse_point
+            && o.is_directory
+            && o.resolved.final_path.eq_ignore_case(area);
+        ok.then_some(o.resolved.final_path)
+    }
+
     /// The real folders a place stands for, with each `*` filled by every real subfolder.
     fn expand(&mut self, place: &Place) -> Vec<WinPath> {
         let Some(base) = base_folder(place.base, self.at).cloned() else {
@@ -342,7 +358,7 @@ impl Scanner<'_> {
             .checked_sub(Duration::from_secs(OLD_INSTALLER_DAYS * 24 * 3600))
             .unwrap_or(UNIX_EPOCH);
         for area in self.area_roots(areas) {
-            let Some(root) = self.real_folder(&area) else {
+            let Some(root) = self.search_root(&area) else {
                 continue;
             };
             let mut hits = Vec::new();
@@ -371,12 +387,9 @@ impl Scanner<'_> {
 
     fn build_folders(&mut self, rule: &'static Rule, areas: &[Base], names: &[&str]) {
         for area in self.area_roots(areas) {
-            if area.is_drive_root() {
-                // A drive root is never "a real folder" for the floor check, but it is a fine
-                // place to start a read-only search.
-            } else if self.real_folder(&area).is_none() {
+            let Some(area) = self.search_root(&area) else {
                 continue;
-            }
+            };
             let mut hits = Vec::new();
             let layout = self.layout;
             self.walk(&area, None, |item| {
@@ -421,9 +434,9 @@ impl Scanner<'_> {
             .as_ref()
             .and_then(|p| p.join("AppData").ok());
         for area in self.area_roots(areas) {
-            if !area.is_drive_root() && self.real_folder(&area).is_none() {
+            let Some(area) = self.search_root(&area) else {
                 continue;
-            }
+            };
             self.walk(&area, None, |item| {
                 let Item::File(f) = item else {
                     return Step::Enter;

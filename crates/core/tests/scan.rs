@@ -201,6 +201,14 @@ impl Profile {
         Self { dir, home }
     }
 
+    /// The real layout with the fake profile listed, as Windows lists the real one (so the
+    /// profile root is on the floor as a delete target, exactly as on the owner's PC).
+    fn layout(&self) -> bytebroom_core::policy::SystemLayout {
+        let mut layout = system_layout();
+        layout.profile_roots.push(real(&self.home));
+        layout
+    }
+
     fn locations(&self) -> Locations {
         Locations {
             profile: Some(real(&self.home)),
@@ -244,7 +252,7 @@ fn run(p: &Profile) -> Vec<Finding> {
         now: SystemTime::now(),
         cancel: None,
     };
-    let report = scan(&p.locations(), &system_layout(), &opts);
+    let report = scan(&p.locations(), &p.layout(), &opts);
     assert!(!report.cancelled);
     report.findings
 }
@@ -383,7 +391,7 @@ fn fresh_temp_items_wait_and_the_cut_off_is_24_hours() {
         now: SystemTime::now() + 2 * DAY,
         cancel: None,
     };
-    let report = scan(&p.locations(), &system_layout(), &opts);
+    let report = scan(&p.locations(), &p.layout(), &opts);
     let temp: BTreeSet<String> = report
         .findings
         .iter()
@@ -420,7 +428,7 @@ fn missing_locations_give_no_findings_and_cancel_stops() {
         now: SystemTime::now(),
         cancel: Some(&flag),
     };
-    let report = scan(&p.locations(), &system_layout(), &opts);
+    let report = scan(&p.locations(), &p.layout(), &opts);
     assert!(report.cancelled);
     assert!(report.findings.is_empty());
 }
