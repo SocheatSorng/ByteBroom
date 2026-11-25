@@ -7,10 +7,16 @@
 #![forbid(unsafe_code)]
 
 pub mod boundary;
+pub mod session;
+pub mod view;
 
 use boundary::{Choice, PreviewId};
 use serde::Serialize;
-use tauri::{WebviewUrl, WebviewWindowBuilder};
+use session::{Reporter, Session};
+use std::sync::Arc;
+use std::time::SystemTime;
+use tauri::{State, WebviewUrl, WebviewWindowBuilder};
+use view::ScanView;
 
 /// An error the page can show. Text goes out to the page only, never in.
 #[derive(Debug, Clone, Serialize)]
@@ -31,22 +37,60 @@ type Reply<T> = Result<T, CommandError>;
 
 const NOT_YET: &str = "not built yet";
 
+/// The real scan of this PC, run on the session's thread. Only reads.
+fn scan_this_pc(r: Reporter) {
+    use bytebroom_core::scan::{ScanOptions, scan_in_steps};
+    use bytebroom_core::walk::WalkOptions;
+    use bytebroom_core::win::locations::locations;
+    use bytebroom_core::win::red::red_sizes;
+    use bytebroom_core::win::system_layout;
+
+    let layout = system_layout();
+    let at = locations(&layout);
+    r.skipped(at.skipped.clone());
+    // Red-tier sizes on their own thread, so they don't hold up the list.
+    let red = {
+        let (r, at, layout) = (r.clone(), at.clone(), layout.clone());
+        std::thread::Builder::new()
+            .name("red sizes".into())
+            .spawn(move || {
+                let opts = WalkOptions {
+                    cancel: Some(&r.cancel),
+                    ..WalkOptions::default()
+                };
+                r.red(red_sizes(&at, &layout, &opts));
+            })
+    };
+    let opts = ScanOptions {
+        now: SystemTime::now(),
+        cancel: Some(&r.cancel),
+    };
+    let report = scan_in_steps(&at, &layout, &opts, |first| r.first_step(&first.findings));
+    r.finished(report.findings, report.cancelled);
+    if let Ok(red) = red {
+        let _ = red.join();
+    }
+}
+
 /// Start a scan in the background (a new scan makes every earlier ID stale).
 #[tauri::command]
-fn start_scan() -> Reply<()> {
-    Err(CommandError::new(NOT_YET))
+fn start_scan(session: State<'_, Arc<Session>>) -> Reply<()> {
+    let (_, thread) = session.start(scan_this_pc);
+    thread
+        .map(|_| ())
+        .map_err(|_| CommandError::new("Windows could not start the scan"))
 }
 
-/// Stop the running scan, if any.
+/// Stop the running scan, if any. What it found so far stays listed.
 #[tauri::command]
-fn cancel_scan() -> Reply<()> {
-    Err(CommandError::new(NOT_YET))
+fn cancel_scan(session: State<'_, Arc<Session>>) {
+    session.cancel();
 }
 
-/// Progress and findings so far.
+/// Progress, red-tier sizes and, when they changed since version `seen`, the findings.
 #[tauri::command]
-fn scan_state() -> Reply<()> {
-    Err(CommandError::new(NOT_YET))
+fn scan_state(session: State<'_, Arc<Session>>, seen: u32) -> ScanView {
+    view::scan_view(&session.snapshot(), seen)
 }
 
 /// Turn the owner's choices into a preview of exactly what would happen.
@@ -86,6 +130,7 @@ pub fn is_app_url(url: &tauri::Url) -> bool {
 /// Build and run the app. Returns when the window closes.
 pub fn run() -> tauri::Result<()> {
     tauri::Builder::default()
+        .manage(Arc::new(Session::default()))
         .invoke_handler(tauri::generate_handler![
             start_scan,
             cancel_scan,

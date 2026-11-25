@@ -21,7 +21,8 @@ const COMMANDS: [&str; 7] = [
 
 /// The only parameter types a command may take: IDs and fixed choices (see `boundary.rs`), or
 /// things Tauri itself provides (never sent by the page).
-const PARAM_TYPES: [&str; 4] = ["Vec<Choice>", "PreviewId", "AppHandle", "State<"];
+const PARAM_TYPES: [&str; 5] = ["Vec<Choice>", "PreviewId", "u32", "AppHandle", "State<"];
+// `State<` is matched as a prefix: Tauri fills it from the app, never from the page.
 
 /// Type names that could carry text or a path from the page.
 const TEXT_OR_PATH_TYPES: [&str; 11] = [
@@ -132,17 +133,66 @@ fn every_command_is_on_the_list_and_registered() {
 #[test]
 fn no_command_takes_text_or_a_path() {
     for (name, params) in commands_in_source() {
-        for param in params.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+        for param in split_top_level(&params) {
             let ty = param
                 .split_once(':')
                 .map(|(_, t)| t.trim())
                 .unwrap_or_else(|| panic!("{name}: {param}"));
+            // Tauri's own injected values match by prefix; what the page sends must match exactly.
             assert!(
-                PARAM_TYPES.iter().any(|ok| ty.starts_with(ok)),
+                PARAM_TYPES
+                    .iter()
+                    .any(|ok| ty == *ok || (ok.ends_with('<') && ty.starts_with(ok))),
                 "{name} takes `{ty}`, which is not on the allow-list"
             );
         }
     }
+}
+
+/// Split a parameter list at the commas that are not inside `<...>`.
+fn split_top_level(params: &str) -> Vec<String> {
+    let mut out = vec![String::new()];
+    let mut depth = 0;
+    for c in params.chars() {
+        match c {
+            '<' => depth += 1,
+            '>' => depth -= 1,
+            ',' if depth == 0 => {
+                out.push(String::new());
+                continue;
+            }
+            _ => {}
+        }
+        out.last_mut().unwrap().push(c);
+    }
+    out.into_iter()
+        .map(|p| p.trim().to_string())
+        .filter(|p| !p.is_empty())
+        .collect()
+}
+
+#[test]
+fn the_parameter_check_catches_text_and_paths() {
+    // The check above, on made-up signatures: these must all be refused.
+    let allowed = |ty: &str| {
+        PARAM_TYPES
+            .iter()
+            .any(|ok| ty == *ok || (ok.ends_with('<') && ty.starts_with(ok)))
+    };
+    for bad in [
+        "String",
+        "&str",
+        "PathBuf",
+        "Vec<String>",
+        "u32x",
+        "Vec<Choice>x",
+    ] {
+        assert!(!allowed(bad), "{bad}");
+    }
+    assert_eq!(
+        split_top_level("s: State<'_, Arc<Session>>, seen: u32"),
+        vec!["s: State<'_, Arc<Session>>", "seen: u32"]
+    );
 }
 
 #[test]

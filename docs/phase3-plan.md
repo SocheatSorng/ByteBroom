@@ -112,7 +112,7 @@ Each task: code → tests → fmt + clippy → full tests → commit with a "why
     - the capability file grants nothing beyond those commands;
     - the CSP forbids remote and inline code;
     - the UI folder contains no `http(s)://` resource.
-- [ ] **2. Scan session**
+- [x] **2. Scan session**
   - Acceptance:
     - background scan with progress and cancel;
     - duplicates arrive as a second step;

@@ -2,11 +2,11 @@
 //! page can only pick among findings the scan already offered. `tests/boundary.rs` checks this file
 //! never gains a text or path type.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// A finding, as the scan that produced it numbered it. Dies with its scan: a later scan has a
 /// different `scan` number, so old IDs are refused.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct FindingId {
     /// Which scan handed this ID out.
