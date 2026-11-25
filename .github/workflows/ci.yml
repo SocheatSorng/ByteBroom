@@ -47,3 +47,38 @@ jobs:
           cargo test --workspace
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --workspace -- --ignored
+
+  build:
+    # The same unsigned installer build.ps1 makes on the owner's PC. Signing stays there:
+    # no key or password ever reaches CI (phase 6, owner's decision 3).
+    name: Unsigned installer (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Rust toolchain
+        shell: powershell
+        run: rustup show active-toolchain
+
+      # The version the owner builds with, from its locked dependencies.
+      - name: Tauri CLI
+        shell: powershell
+        run: cargo install --locked tauri-cli --version 2.12.6
+
+      - name: Build the helper, the window and the installer
+        shell: powershell
+        run: ./build.ps1
+
+      # The generated installer.nsi keeps the per-machine folder, the helper and the hooks.
+      - name: Check the built installer script
+        shell: powershell
+        run: cargo test -p bytebroom-app --test installer

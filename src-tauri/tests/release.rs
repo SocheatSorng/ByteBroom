@@ -123,6 +123,27 @@ fn build_scrubs_the_user_folder_and_packs_only_the_fresh_helper() {
     assert!(build.find("Assert-NoProfilePath (").unwrap() > bundle);
 }
 
+/// CI builds the same unsigned installer as `build.ps1` and checks its generated script, but
+/// never signs: the key stays on the owner's PC (owner's decision 3, task 8).
+#[test]
+fn ci_builds_the_unsigned_installer_and_never_signs() {
+    let ci = read(".github/workflows/ci.yml");
+    assert!(ci.contains("cargo install --locked tauri-cli --version"));
+    let build = ci
+        .find("run: ./build.ps1")
+        .expect("ci.yml runs ./build.ps1");
+    let after = ci
+        .find("cargo test -p bytebroom-app --test installer")
+        .expect("ci.yml checks the built installer script");
+    assert!(after > build, "the installer test runs after the build");
+    for wf in ["ci.yml", "security.yml", "codeql.yml"] {
+        let text = read(&format!(".github/workflows/{wf}"));
+        for never in ["TAURI_SIGNING", "signer", "secrets."] {
+            assert!(!text.contains(never), "{wf} mentions {never}");
+        }
+    }
+}
+
 /// Sign `data` as the Tauri CLI does (prehashed, version in the trusted comment), base64-encoded.
 fn tauri_sig(kp: &KeyPair, data: &[u8], version: &str) -> String {
     let trusted = format!("timestamp:1700000000\tfile:ByteBroom_setup.exe\tversion:{version}");
