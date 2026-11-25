@@ -60,7 +60,16 @@ fn the_installer_is_per_machine_nsis_with_the_helper_inside() {
 #[test]
 fn the_installer_refuses_every_folder_but_program_files() {
     let hooks = read("windows/hooks.nsh");
-    let check = r#"${If} $INSTDIR != "$PROGRAMFILES64\${PRODUCTNAME}""#;
+    // The folder is written out: Tauri's template includes hooks.nsh *before* it defines
+    // PRODUCTNAME, so `${PRODUCTNAME}` in a Function stayed literal text and the folder page
+    // refused even Program Files\ByteBroom (makensis warning 6000). It must match productName.
+    let product = json("tauri.conf.json")["productName"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(product, "ByteBroom");
+    let check = format!(r#"${{If}} $INSTDIR != "$PROGRAMFILES64\{product}""#);
+    let check = check.as_str();
     // The folder page can't go on with another folder...
     let page = hooks
         .split("Function .onVerifyInstDir")
@@ -68,6 +77,15 @@ fn the_installer_refuses_every_folder_but_program_files() {
         .and_then(|s| s.split("FunctionEnd").next())
         .expect(".onVerifyInstDir");
     assert!(page.contains(check) && page.contains("Abort"));
+    // Functions compile where hooks.nsh is included, before the template's !defines: only
+    // LogicLib's words (defined by the earlier includes) may appear as ${...} in them.
+    for word in page.split("${").skip(1) {
+        let name = word.split('}').next().unwrap();
+        assert!(
+            ["If", "EndIf", "Else", "ElseIf"].contains(&name),
+            ".onVerifyInstDir uses ${{{name}}}, which is not defined yet where it is compiled"
+        );
+    }
     // ...and silent, passive and command-line installs stop before copying anything.
     let pre = hooks
         .split("!macro NSIS_HOOK_PREINSTALL")

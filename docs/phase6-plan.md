@@ -309,6 +309,11 @@ Built 2026-11-26, version 1.0.0. `./check.ps1` and `./build.ps1` pass.
       administrator at every update. The installer now accepts only `$PROGRAMFILES64\ByteBroom`,
       both on the folder page and before copying in silent or passive installs. The window
       refuses to update unless it runs unelevated from that admin-owned install.
+      Found after the merge of task 0, from makensis warning 6000: the first version wrote
+      `${PRODUCTNAME}` in the folder-page check, but Tauri's template includes the hooks before it
+      defines that name, so the page would have refused even `Program Files\ByteBroom`. The folder
+      is now written out, and a test checks that it matches `productName` and that the check uses
+      no name defined later.
     - **S1:** no secret is set during the build (above).
     - **S2:** no code may override the updater's settings (a boundary test).
     - **S3:** no install during a red-tier action, and one install at a time.
