@@ -4,7 +4,7 @@ A Windows disk-space cleaner. With your explicit permission (a Windows administr
 scans the drive, shows you what it can clean and how much space each item frees, and removes only what
 you confirm.
 
-> **Status: phase 3 (window).** The safety core and delete engine (phase 1) and the scanner
+> **Status: phase 3 (window) done, version 0.3.0.** The safety core and delete engine (phase 1) and the scanner
 > (phase 2) are done. The window scans, previews and cleans without administrator rights; Windows'
 > own areas (the red tier) come in phase 4. The phases are in `docs/spec.md`.
 

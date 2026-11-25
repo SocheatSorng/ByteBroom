@@ -232,7 +232,7 @@ checksum = "87a0cf66fd1eb2fb7b822cb78370d82303750809bc6ba855f3f58e517d3238db"
 
 [[package]]
 name = "bytebroom-app"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "bytebroom-core",
  "serde",
@@ -244,7 +244,7 @@ dependencies = [
 
 [[package]]
 name = "bytebroom-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "proptest",
  "windows-sys 0.61.2",
@@ -252,7 +252,7 @@ dependencies = [
 
 [[package]]
 name = "bytebroom-scan"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "bytebroom-core",
 ]

@@ -184,7 +184,7 @@ Each task: code → tests → fmt + clippy → full tests → commit with a "why
 - [x] **9. Accessibility pass**
   - `agent-skills:accessibility-auditor` checks the window (keyboard, contrast, labels) through the
     harness; must-fixes are fixed.
-- [ ] **10. Owner check**
+- [x] **10. Owner check**
   - The first real clean: the owner cleans a few green items (permanent delete, and the Recycle Bin)
     and moves one large file to another drive, with exact steps. Claude verifies read-only that only
     those items changed and that the moved file's journal and hash are right.
@@ -210,4 +210,32 @@ Each task: code → tests → fmt + clippy → full tests → commit with a "why
 
 ## Results
 
-(filled in at the end of the phase)
+Done 2026-11-25, version 0.3.0. All checks pass; the release build works.
+
+- **Reviews:**
+  - Security: no must-fix; both should-fixes and four notes fixed with tests. Two notes are recorded
+    under task 8 as prerequisites for phase 4.
+  - UI designer pass: layout fixes, plus one bug (an empty category after a redraw), fixed.
+  - Accessibility (WCAG 2.2 AA): focus kept across redraws, quieter announcements, control
+    borders at 3:1, and an endless-redraw bug, all fixed.
+- **Owner's real test** (on the real PC, verified read-only by Claude):
+  - **Delete for good:** the green items, 12.5 GB back, 111,106 files and folders removed. 267
+    were left with correct reasons: Brave caches being written ("changed since the scan") and
+    temp items only administrators can touch ("access denied"). Every browser profile's logins,
+    cookies, history and `Local State` were still there.
+  - **Move:** one 1.2 GB file from `D:` to `E:`. The destination's SHA-256 and size matched the
+    journal, and the source was gone.
+  - **Recycle Bin:** one amber installer (66.5 MB) was in the Recycle Bin with its original folder;
+    0 B back now, as the preview said.
+  - The check right before acting refused files that changed between the scan and the clean
+    (Brave and Explorer caches).
+- **Bugs the real test found, fixed with tests:**
+  - the browser's own menu and reload keys could wipe the list mid-task;
+  - "space back now" counted a move twice.
+- **Open bug, left for later (owner's decision, 2026-11-25):** for the move and for the amber
+  recycle, the owner saw no Windows dialog "ByteBroom: clean your own files?", although the build
+  contained it. The code path should stop the clean unless "Clean them" is pressed (every failure
+  in the plugin and `rfd` returns Cancel), so what happened on screen is not yet understood.
+  **Investigate before phase 4:** log the dialog's result, show it with the main window as its
+  parent, and reproduce it with an amber Recycle Bin item, waiting without clicking.
+  Until then, the page's own amber confirm is the one known to work.
