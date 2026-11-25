@@ -4,9 +4,10 @@ A Windows disk-space cleaner. With your explicit permission (a Windows administr
 scans the drive, shows you what it can clean and how much space each item frees, and removes only what
 you confirm.
 
-> **Status: phase 3 (window) done, version 0.3.0.** The safety core and delete engine (phase 1) and the scanner
-> (phase 2) are done. The window scans, previews and cleans without administrator rights; Windows'
-> own areas (the red tier) come in phase 4. The phases are in `docs/spec.md`.
+> **Status: phase 4 (elevation and the red tier) built, awaiting the owner's check; version 0.3.0.**
+> The safety core and delete engine (phase 1), the scanner (phase 2) and the window (phase 3) are
+> done. The window now also frees three of Windows' own areas through Windows' own tools. The
+> phases are in `docs/spec.md`.
 
 ## Safety promises
 
@@ -17,7 +18,8 @@ you confirm.
 ## What ByteBroom cleans
 
 Green items start ticked, because Windows or the app rebuilds them. Amber items are never ticked for
-you. Red items are shown with their sizes only; ByteBroom never deletes them as files.
+you. Red items are Windows' own areas: ByteBroom never deletes them as files. Three of them have a
+button in the window's red tier (below); the rest are shown with their sizes only.
 
 | Tier | Category |
 |---|---|
@@ -101,12 +103,28 @@ cargo deny check
 Tests build fake folder trees in a fresh temp folder and never touch your own files, drives or Recycle
 Bin. A docs-drift test checks that the commands above are the ones `check.ps1` and CI really run.
 
+### The red tier: Windows' own areas
+
+Three buttons free space in Windows' own areas, each only after you type its word:
+
+| Button | Type | What happens | Undo |
+| --- | --- | --- | --- |
+| **Empty the Recycle Bin** | `recycle bin` | Windows' own dialog "ByteBroom: empty the Recycle Bin?" opens; only **Empty it** goes ahead. No administrator rights. | Can't be undone. |
+| **Clear the Delivery Optimization cache** | `delivery optimization` | The UAC prompt, then the helper makes a restore point and runs `Delete-DeliveryOptimizationCache -Force` (pinned files kept). | Can't be undone; Windows downloads again what it needs. |
+| **Turn hibernation off** | `hibernation` | The UAC prompt, then the helper makes a restore point and runs `powercfg /hibernate off`. Hibernate and Hybrid Sleep stop working. | `powercfg /hibernate on` in an administrator PowerShell. |
+
+Before a helper action, a restore point is made (a point from the last 24 hours counts, as Windows
+makes at most one a day). If System Restore is off, paused for low disk space, or the point can't
+be confirmed, nothing is changed and the window says why. Afterwards the red sizes are measured
+again. How to undo each action and how to roll Windows back, even when it won't start, is in
+`docs/recovery.md`: keep it at hand.
+
 To run the window, install the Tauri CLI once with `cargo install --locked tauri-cli`, then run
 `cargo tauri dev` in your project folder. To build it, run `./build.ps1`: it makes
 `target\release\bytebroom.exe` (the installer comes in phase 6).
 
-`./build.ps1` also builds the elevated helper, `target\release\bytebroom-admin.exe` (phase 4,
-in progress). The window never runs as administrator; for a red-tier action it starts this helper
+`./build.ps1` also builds the elevated helper, `target\release\bytebroom-admin.exe` (phase 4).
+The window never runs as administrator; for a red-tier action it starts this helper
 through Windows' UAC prompt, which only you click. The helper has no window and does one fixed
 action per run. It runs only from an admin-owned folder, `Program Files\ByteBroom`, and refuses
 anywhere else, so ordinary programs can't swap it. To put it there, run

@@ -290,6 +290,44 @@ fn the_recovery_recipe_matches_the_helper_and_the_plan() {
     assert!(!recipe.contains("/ResetBase /"));
 }
 
+/// Phase 4, task 7: the README's red-tier table matches the actions' words, texts and plans.
+#[test]
+fn the_readme_red_tier_matches_the_code() {
+    use bytebroom_core::admin::{AdminAction, plan};
+    use bytebroom_core::red_actions::RedAction;
+    let readme = read("README.md");
+    for a in RedAction::ALL {
+        assert!(
+            readme.contains(&format!("**{}**", a.title())),
+            "{a:?} title"
+        );
+        assert!(
+            readme.contains(&format!("`{}`", a.confirm_word())),
+            "{a:?} word"
+        );
+    }
+    // The commands the README names are the ones the helper runs.
+    let s32 = r"C:\Windows\System32";
+    let hib = plan(AdminAction::HibernationOff, s32)
+        .unwrap()
+        .args
+        .join(" ");
+    assert!(readme.contains(&format!("`powercfg {hib}`")));
+    let cache = plan(AdminAction::DeliveryOptimizationCache, s32)
+        .unwrap()
+        .args
+        .join(" ");
+    assert!(cache.contains("Delete-DeliveryOptimizationCache -Force"));
+    assert!(readme.contains("`Delete-DeliveryOptimizationCache -Force`"));
+    assert!(readme.contains("`powercfg /hibernate on`"));
+    // The Recycle Bin dialog's title and button, as the window shows them.
+    let confirm = read("src-tauri/src/confirm.rs");
+    assert!(readme.contains("\"ByteBroom: empty the Recycle Bin?\""));
+    assert!(confirm.contains("EMPTY_TITLE: &str = \"ByteBroom: empty the Recycle Bin?\""));
+    assert!(readme.contains("**Empty it**"));
+    assert!(readme.contains("`docs/recovery.md`"));
+}
+
 /// Phase 4: the elevated helper the README describes is built, installed and removed by the
 /// files it names, from the folder it names.
 #[test]
