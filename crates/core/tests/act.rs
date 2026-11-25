@@ -405,6 +405,40 @@ fn a_temp_item_used_after_the_scan_is_refused_by_the_24_hour_rule() {
     assert!(!h.local.join("Temp").join("a.tmp").exists());
 }
 
+/// Security review note 4: the 24-hour rule judges the item directly inside the rule's folder.
+/// A finding nested deeper (the scanner never makes one) can't be judged, so it stays.
+#[test]
+fn a_temp_finding_nested_below_its_root_fails_safe() {
+    let h = Home::new("act-nested");
+    let mut findings = h.findings();
+    let olddir = h.index(&findings, "AppData\\Local\\Temp\\olddir");
+    let b = real(&h.local.join("Temp").join("olddir").join("b.tmp"));
+    findings[olddir].path = b.clone();
+    findings[olddir].is_folder = false;
+    let pv = preview(
+        &findings,
+        &[Choice {
+            index: olddir,
+            action: Action::Delete,
+        }],
+        None,
+        &h.layout(),
+    )
+    .unwrap();
+    let (results, _) = run(&h, &findings, &pv);
+    assert!(h.local.join("Temp").join("olddir").join("b.tmp").exists());
+    assert_eq!(
+        skipped_reasons(&results)
+            .iter()
+            .filter(|(p, _)| *p == b)
+            .map(|(_, r)| r.clone())
+            .collect::<Vec<_>>(),
+        vec![SkipReason::ChangedSinceScan(
+            "its folder can no longer be checked"
+        )]
+    );
+}
+
 #[test]
 fn recycling_goes_only_through_the_given_bin_and_only_checked_items() {
     let h = Home::new("act-recycle");

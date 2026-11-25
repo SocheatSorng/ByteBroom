@@ -319,6 +319,26 @@ fn the_app_depends_only_on_approved_crates() {
     );
 }
 
+/// Security review: the page's confirmations can be skipped by a page, so `clean` itself asks in
+/// Windows' own dialog before touching amber items, and only then starts acting.
+#[test]
+fn clean_asks_in_rust_before_acting_on_amber_items() {
+    let lib = read("src/lib.rs");
+    let body = lib
+        .split("async fn clean(")
+        .nth(1)
+        .and_then(|s| s.split("\n}\n").next())
+        .expect("the clean command");
+    let ask = body.find("amber_question(&ready)").expect("clean asks");
+    let shown = body.find("blocking_show()").expect("in a native dialog");
+    let act = body.find("carry_out(").expect("clean acts");
+    assert!(
+        ask < shown && shown < act,
+        "the question comes before acting"
+    );
+    assert!(body.contains("if !yes"), "a no stops the clean");
+}
+
 /// The UI harness (tools/ui-harness) fakes the commands in a browser; none of it may reach the
 /// app. The app has no Cargo features at all, so no build can switch fake data on, and the
 /// window's files never name the harness.
@@ -392,6 +412,8 @@ fn the_page_loads_nothing_remote_and_runs_no_inline_code() {
                 "new function",
                 "innerhtml",
                 "outerhtml",
+                "insertadjacenthtml",
+                "createcontextualfragment",
                 "document.write",
             ] {
                 assert!(!lower.contains(bad), "{name} uses {bad}");

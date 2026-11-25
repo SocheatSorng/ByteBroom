@@ -163,9 +163,24 @@ Each task: code → tests → fmt + clippy → full tests → commit with a "why
 - [x] **7. Docs**
   - README: how to run and build the app, what each confirmation means, and the same-drive Recycle Bin
     warning. The docs-drift test covers the new commands.
-- [ ] **8. Security review**
+- [x] **8. Security review**
   - `agent-skills:security-auditor` reviews the boundary (commands, capabilities, CSP), the preview
     and clean path, and the move destination. Every must-fix is fixed with a test.
+  - Result (2026-11-25): no must-fix. Fixed with tests:
+    - should-fix 1, confirmations only in the page: `clean` asks again in Windows' own dialog
+      before acting on any amber item;
+    - should-fix 2, two cleans at once could each keep "the other" copy of a duplicate: while a
+      clean runs nothing else starts, and a cleaned scan is used up;
+    - note 4: the 24-hour rule fails safe for an item nested below its root;
+    - note 5: more choices than findings are refused;
+    - note 6: pop-up windows are denied;
+    - `insertAdjacentHTML` and `createContextualFragment` are banned in the page too.
+  - **Before phase 4 (elevation)**, from the same review:
+    - note 3: between the check right before acting and the engine re-opening the item, a file
+      could be swapped. Pass each item's identity into the engine and compare it on the handle
+      that deletes or copies (Recycle goes through the shell by path: document what is left).
+    - note 7: the move journal's folder is opened following links; open it no-follow, or keep it
+      in an admin-owned folder.
 - [ ] **9. Accessibility pass**
   - `agent-skills:accessibility-auditor` checks the window (keyboard, contrast, labels) through the
     harness; must-fixes are fixed.

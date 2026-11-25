@@ -88,6 +88,10 @@ struct Inner {
     preview: Option<(PreviewId, Arc<Preview>)>,
     /// How many previews this scan has made.
     previews_made: u32,
+    /// A clean is running (see `CleanGuard`).
+    cleaning: bool,
+    /// This scan was cleaned once; its findings no longer describe the disk.
+    used_up: bool,
 }
 
 /// A preview ready for confirming: its ID, what it does, and the findings it refers to.
@@ -197,6 +201,14 @@ impl Session {
     ) -> (u32, std::io::Result<JoinHandle<()>>) {
         let reporter = {
             let mut i = self.lock();
+            if i.cleaning {
+                return (
+                    i.scan,
+                    Err(std::io::Error::other(
+                        "a clean is running; scan again when it ends",
+                    )),
+                );
+            }
             i.cancel.store(true, Ordering::Relaxed);
             let cancel = Arc::new(AtomicBool::new(false));
             *i = Inner {
@@ -279,6 +291,17 @@ impl Session {
         if i.phase.running() {
             return Err("wait for the scan to finish, or stop it".into());
         }
+        if i.cleaning {
+            return Err("a clean is running; wait for it to finish".into());
+        }
+        if i.used_up {
+            return Err("this scan was already cleaned; scan again to see what is left".into());
+        }
+        // Each finding can be chosen once; more choices than findings can only be a bad request
+        // (and would make the preview's checks slow while holding the lock).
+        if choices.len() > i.findings.len() {
+            return Err("more items were chosen than the scan found".into());
+        }
         let mut core_choices = Vec::with_capacity(choices.len());
         for c in choices {
             let index = check_id(i.scan, &i.findings, c.finding).map_err(|e| e.to_string())?;
@@ -308,24 +331,58 @@ impl Session {
     }
 
     /// Take the preview `id` for cleaning. It must be the latest preview of the current scan,
-    /// and it can be taken once: a second `clean` of the same preview is refused.
-    pub fn take_preview(&self, id: PreviewId) -> Result<Ready, String> {
+    /// and it can be taken once: a second `clean` of the same preview is refused. While the
+    /// returned guard lives, a clean is running: no scan, preview or other clean can start
+    /// (security review: two cleans at once could each keep "the other" copy of a duplicate).
+    /// Afterwards the scan is used up, so the next clean needs a new scan.
+    pub fn take_preview(self: &Arc<Self>, id: PreviewId) -> Result<(Ready, CleanGuard), String> {
         let mut i = self.lock();
         if i.phase.running() {
             return Err("a scan is running; preview again when it ends".into());
         }
+        if i.cleaning {
+            return Err("a clean is running; wait for it to finish".into());
+        }
         match i.preview.take() {
-            Some((kept, preview)) if kept == id && id.scan == i.scan => Ok(Ready {
-                id,
-                preview,
-                findings: i.findings.clone(),
-            }),
+            Some((kept, preview)) if kept == id && id.scan == i.scan => {
+                i.cleaning = true;
+                i.used_up = true;
+                Ok((
+                    Ready {
+                        id,
+                        preview,
+                        findings: i.findings.clone(),
+                    },
+                    CleanGuard {
+                        session: self.clone(),
+                    },
+                ))
+            }
             other => {
                 // Not this one: the latest preview stays for its own confirm.
                 i.preview = other;
                 Err("that preview is out of date; preview again".into())
             }
         }
+    }
+}
+
+/// Marks a clean as running; dropping it (when the clean ends, or if it panics) ends that.
+#[derive(Debug)]
+pub struct CleanGuard {
+    session: Arc<Session>,
+}
+
+impl CleanGuard {
+    /// The owner declined at the last step and nothing was done: the scan stays usable.
+    pub fn nothing_done(self) {
+        self.session.lock().used_up = false;
+    }
+}
+
+impl Drop for CleanGuard {
+    fn drop(&mut self) {
+        self.session.lock().cleaning = false;
     }
 }
 
@@ -479,10 +536,39 @@ mod tests {
         assert_ne!(first.id, second.id);
         // The older preview is out of date; the latest is still there afterwards.
         assert!(s.take_preview(first.id).is_err());
-        let taken = s.take_preview(second.id).unwrap();
+        let (taken, guard) = s.take_preview(second.id).unwrap();
         assert_eq!(taken.preview.actions[0].items, vec![1]);
         // Once only.
         assert!(s.take_preview(second.id).is_err());
+        drop(guard);
+    }
+
+    /// Security review: while a clean runs nothing else may start, and a cleaned scan can't be
+    /// previewed again (two cleans could each keep "the other" copy of a duplicate).
+    #[test]
+    fn nothing_else_runs_during_a_clean_and_a_cleaned_scan_is_used_up() {
+        let (s, scan) = finished_session();
+        let ready = s.make_preview(&[choose(scan, 0)], &layout()).unwrap();
+        let (_, guard) = s.take_preview(ready.id).unwrap();
+        assert!(s.make_preview(&[choose(scan, 1)], &layout()).is_err());
+        let (still, thread) = s.start(|r| r.finished(Vec::new(), false));
+        assert_eq!(still, scan);
+        assert!(thread.is_err(), "no scan starts during a clean");
+        drop(guard);
+        // Used up: a new preview needs a new scan.
+        let err = s.make_preview(&[choose(scan, 1)], &layout()).unwrap_err();
+        assert!(err.contains("scan again"), "{err}");
+        let (scan2, t) = s.start(|r| r.finished(vec![finding("a")], false));
+        t.unwrap().join().unwrap();
+        assert!(s.make_preview(&[choose(scan2, 0)], &layout()).is_ok());
+    }
+
+    #[test]
+    fn more_choices_than_findings_are_refused() {
+        let (s, scan) = finished_session();
+        let many: Vec<Choice> = (0..3).map(|_| choose(scan, 0)).collect();
+        assert!(s.make_preview(&many, &layout()).is_err());
+        assert!(s.make_preview(&many[..2], &layout()).is_ok());
     }
 
     #[test]

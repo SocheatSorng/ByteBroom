@@ -105,7 +105,11 @@ fn check_targets(
             let names = fresh
                 .entry(key)
                 .or_insert_with(|| too_fresh_now(&f.root, ctx.layout, ctx.now, f.rule.fresh_hours));
-            let name = f.path.parts().last();
+            // The 24-hour rule judges items directly inside the rule's folder; anything deeper
+            // (never produced by the scanner) can't be judged, so it fails safe (security review).
+            let name = (f.path.parts().len() == f.root.parts().len() + 1)
+                .then(|| f.path.parts().last())
+                .flatten();
             why = match (names, name) {
                 (Some(names), Some(name)) if !names.contains(name) => None,
                 (Some(_), Some(_)) => Some("it was used in the last day, or can't all be read"),

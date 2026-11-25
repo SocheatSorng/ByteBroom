@@ -138,17 +138,43 @@ fn journal_path(layout: &SystemLayout) -> Option<std::path::PathBuf> {
 
 /// Act on exactly the confirmed preview, once: Rust takes the preview it built (the page sends
 /// only its ID), checks every item again right before acting, and reports what happened.
+///
+/// The page's confirmations are for the owner's convenience; this is the one a page can't skip.
+/// When the preview touches any amber item (the owner's own files), Rust asks again in Windows'
+/// own dialog, with the count and size, before anything is done (security review).
 #[tauri::command]
 async fn clean(
+    app: AppHandle,
     session: State<'_, Arc<Session>>,
     layout: State<'_, Layout>,
     preview_id: PreviewId,
 ) -> Reply<CleanView> {
-    let ready = session
+    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+
+    let (ready, guard) = session
         .take_preview(preview_id)
         .map_err(|e| CommandError::new(&e))?;
+    if let Some(question) = amber_question(&ready) {
+        let yes = app
+            .dialog()
+            .message(question)
+            .title("ByteBroom: clean your own files?")
+            .kind(MessageDialogKind::Warning)
+            .buttons(MessageDialogButtons::OkCancelCustom(
+                "Clean them".into(),
+                "Cancel".into(),
+            ))
+            .blocking_show();
+        if !yes {
+            guard.nothing_done();
+            return Err(CommandError::new(
+                "cancelled: nothing was cleaned. Preview again to choose.",
+            ));
+        }
+    }
     let layout = layout.0.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let _guard = guard;
         let journal = journal_path(&layout).ok_or_else(|| {
             CommandError::new("ByteBroom's folder in local app data can't be made")
         })?;
@@ -165,6 +191,50 @@ async fn clean(
     .map_err(|_| {
         CommandError::new("the clean stopped unexpectedly; scan again to see what is left")
     })?
+}
+
+/// The question Rust asks in its own dialog before a clean that touches amber items, or `None`
+/// when the preview has none. Names how many, how big, what happens, and up to five paths.
+pub fn amber_question(ready: &session::Ready) -> Option<String> {
+    let pv = &ready.preview;
+    if pv.confirm_amber.is_empty() {
+        return None;
+    }
+    let amber: Vec<&bytebroom_core::scan::Finding> = pv
+        .confirm_amber
+        .iter()
+        .filter_map(|n| ready.findings.get(*n))
+        .collect();
+    let bytes: u64 = amber.iter().map(|f| f.bytes).sum();
+    let mut text = format!(
+        "{} of your own file{} ({}) will be cleaned as the preview showed:\n",
+        amber.len(),
+        if amber.len() == 1 { "" } else { "s" },
+        bytebroom_core::summary::human_bytes(bytes),
+    );
+    for a in &pv.actions {
+        let n = a
+            .items
+            .iter()
+            .filter(|i| pv.confirm_amber.contains(i))
+            .count();
+        if n > 0 {
+            let what = match a.action {
+                bytebroom_core::preview::Action::Delete => "deleted for good",
+                bytebroom_core::preview::Action::Move => "moved",
+                bytebroom_core::preview::Action::Recycle => "sent to the Recycle Bin",
+            };
+            text.push_str(&format!("\n- {n} {what}"));
+        }
+    }
+    text.push_str("\n\n");
+    for f in amber.iter().take(5) {
+        text.push_str(&format!("{}\n", f.path));
+    }
+    if amber.len() > 5 {
+        text.push_str(&format!("and {} more\n", amber.len() - 5));
+    }
+    Some(text)
 }
 
 /// Ask the owner for a move destination with Windows' own folder dialog, run by Rust (the page
@@ -249,6 +319,8 @@ pub fn run() -> tauri::Result<()> {
                 .inner_size(1100.0, 760.0)
                 .min_inner_size(720.0, 520.0)
                 .on_navigation(is_app_url)
+                // No pop-up windows of any kind (security review note 6).
+                .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
                 .build()?;
             Ok(())
         })
@@ -258,6 +330,77 @@ pub fn run() -> tauri::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rust_asks_before_cleaning_amber_items_and_says_what_and_how_much() {
+        use bytebroom_core::preview::{Action, Choice, preview};
+        use bytebroom_core::rules::RULES;
+        let p = |s: &str| WinPath::parse(s).unwrap();
+        let f = |rule: &str, path: &str, bytes: u64| {
+            let rule = RULES.iter().find(|r| r.id == rule).unwrap();
+            let path = p(path);
+            bytebroom_core::scan::Finding {
+                rule,
+                tier: rule.tier,
+                root: p(path.to_string().rsplit_once('\\').unwrap().0),
+                path,
+                is_folder: false,
+                bytes,
+                files: 1,
+                newest: std::time::UNIX_EPOCH,
+                cloud: false,
+                pre_ticked: rule.pre_ticked(),
+                duplicate_of: None,
+                identity: None,
+            }
+        };
+        let findings = Arc::new(vec![
+            f("user-temp", "C:\\T\\a.tmp", 10),
+            f("large-files", "D:\\Big\\film.mkv", 3 * 1024 * 1024 * 1024),
+            f("old-installers", "D:\\Dl\\setup.exe", 1024 * 1024),
+        ]);
+        let layout = SystemLayout {
+            system_root: p("C:\\Windows"),
+            program_files: vec![p("C:\\Program Files")],
+            program_data: p("C:\\ProgramData"),
+            profiles_dir: p("C:\\Users"),
+            profile_roots: vec![p("C:\\Users\\Ann")],
+            extra_denied: Vec::new(),
+        };
+        let ready = |choices: &[Choice]| session::Ready {
+            id: PreviewId { scan: 1, number: 1 },
+            preview: Arc::new(preview(&findings, choices, None, &layout).unwrap()),
+            findings: findings.clone(),
+        };
+        let green_only = ready(&[Choice {
+            index: 0,
+            action: Action::Delete,
+        }]);
+        assert_eq!(amber_question(&green_only), None);
+        let mixed = ready(&[
+            Choice {
+                index: 0,
+                action: Action::Delete,
+            },
+            Choice {
+                index: 1,
+                action: Action::Delete,
+            },
+            Choice {
+                index: 2,
+                action: Action::Recycle,
+            },
+        ]);
+        let q = amber_question(&mixed).unwrap();
+        assert!(q.starts_with("2 of your own files ("), "{q}");
+        assert!(q.contains("- 1 deleted for good"), "{q}");
+        assert!(q.contains("- 1 sent to the Recycle Bin"), "{q}");
+        assert!(
+            q.contains("D:\\Big\\film.mkv") && q.contains("D:\\Dl\\setup.exe"),
+            "{q}"
+        );
+        assert!(!q.contains("a.tmp"), "only amber items are listed: {q}");
+    }
 
     #[test]
     fn moves_go_only_to_unprotected_folders_on_fixed_drives() {
