@@ -5,6 +5,7 @@
 //! module allowed to use `unsafe`.
 
 pub mod act;
+pub mod admin;
 pub mod clean;
 pub mod duplicates;
 pub mod engine;

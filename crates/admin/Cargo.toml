@@ -1,0 +1,15 @@
+[package]
+name = "bytebroom-admin"
+description = "ByteBroom's elevated helper: one fixed action per run, from an admin-owned folder, answering only by exit code."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+bytebroom-core = { path = "../core" }

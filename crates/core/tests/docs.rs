@@ -249,3 +249,30 @@ fn the_scan_tool_the_readme_names_exists() {
         )
     );
 }
+
+/// Phase 4: the elevated helper the README describes is built, installed and removed by the
+/// files it names, from the folder it names.
+#[test]
+fn the_helper_the_readme_names_is_built_and_installed_as_it_says() {
+    let readme = read("README.md");
+    for text in [
+        r"`target\release\bytebroom-admin.exe`",
+        r"`Program Files\ByteBroom`",
+        "`./tools/install-helper.ps1`",
+        "`./tools/uninstall-helper.ps1`",
+    ] {
+        assert!(readme.contains(text), "README lacks {text}");
+    }
+    assert!(read("build.ps1").contains("cargo build --release -p bytebroom-admin"));
+    assert!(read("Cargo.toml").contains("\"crates/admin\""));
+    let install = read("tools/install-helper.ps1");
+    let uninstall = read("tools/uninstall-helper.ps1");
+    for script in [&install, &uninstall] {
+        assert!(script.starts_with("#Requires -RunAsAdministrator"));
+        assert!(script.contains("Join-Path $programFiles 'ByteBroom'"));
+        assert!(script.contains("'bytebroom-admin.exe'"));
+    }
+    let win = read("crates/core/src/win/admin.rs");
+    assert!(win.contains("HELPER_FOLDER: &str = \"ByteBroom\""));
+    assert!(win.contains("HELPER_EXE: &str = \"bytebroom-admin.exe\""));
+}

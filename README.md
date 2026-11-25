@@ -105,6 +105,14 @@ To run the window, install the Tauri CLI once with `cargo install --locked tauri
 `cargo tauri dev` in your project folder. To build it, run `./build.ps1`: it makes
 `target\release\bytebroom.exe` (the installer comes in phase 6).
 
+`./build.ps1` also builds the elevated helper, `target\release\bytebroom-admin.exe` (phase 4,
+in progress). The window never runs as administrator; for a red-tier action it starts this helper
+through Windows' UAC prompt, which only you click. The helper has no window and does one fixed
+action per run. It runs only from an admin-owned folder, `Program Files\ByteBroom`, and refuses
+anywhere else, so ordinary programs can't swap it. To put it there, run
+`./tools/install-helper.ps1` in an administrator PowerShell in your project folder; to remove
+it, run `./tools/uninstall-helper.ps1` the same way.
+
 To check the window's look without scanning anything, run `node tools/ui-harness/serve.mjs` and open
 the address it prints. It serves the real page with made-up findings and never runs ByteBroom.
 

@@ -269,7 +269,8 @@ Each task: code → tests → fmt + clippy → full tests → build → commit w
   **Design consequence:** emptying the Recycle Bin needs no administrator rights, and a
   restore point can't bring those files back. So it needs no helper, no UAC prompt and no
   restore point (decision 8, owner: yes).
-- [ ] **1. The helper skeleton and the elevation path (no actions yet)**
+- [x] **1. The helper skeleton and the elevation path (no actions yet)**: built and tested
+  2026-11-25; the real UAC round trip waits for the owner (steps under "Owner check for task 1")
   - Acceptance:
     - `bytebroom-admin.exe` accepts only the fixed action names; anything else exits with an
       error and does nothing;
@@ -330,6 +331,25 @@ Each task: code → tests → fmt + clippy → full tests → build → commit w
    `$env:BYTEBROOM_REAL_RECYCLE_BIN_TESTS = "1"; cargo test -p bytebroom-core --test recycle real_bin_recycles_one_dummy_file -- --ignored --nocapture`
 7. Tell Claude. Claude reads `ByteBroom\bytebroom.log` in your local app data (two lines,
    `Cancelled` and `Clean`, with how long the dialog was open).
+
+## Owner check for task 1 (the UAC round trip)
+
+In your project folder:
+
+1. In an ordinary PowerShell, run `./build.ps1`.
+2. In an **administrator** PowerShell, run `./tools/install-helper.ps1`.
+
+   Expected: "Installed: C:\Program Files\ByteBroom\bytebroom-admin.exe … The helper accepts its
+   place." Any other answer stops the script; tell Claude what it said.
+3. Back in the **ordinary** PowerShell, run
+   `cargo run --release -p bytebroom-admin --example elevate_noop`.
+   - A UAC prompt for `bytebroom-admin.exe` appears. Check that it names that program, then
+     click **Yes**. Expected: `Answer: Done (done)`.
+   - Run it again and click **No**. Expected: `Not run: Cancelled`.
+4. Tell Claude. Claude checks read-only that only `Program Files\ByteBroom\bytebroom-admin.exe`
+   was added.
+
+To remove the helper: run `./tools/uninstall-helper.ps1` in an administrator PowerShell.
 
 ## Risks
 

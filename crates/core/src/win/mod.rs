@@ -6,7 +6,11 @@
 //! through the same handle, so what was checked is what gets deleted.
 #![allow(unsafe_code)]
 
+pub mod admin;
 pub mod dir;
+
+/// `READ_CONTROL` (winnt.h): read an object's owner and access list.
+const READ_CONTROL: u32 = 0x2_0000;
 pub mod fileop;
 pub mod hash;
 mod layout;
@@ -52,6 +56,8 @@ pub enum Access {
     List,
     /// Read attributes and contents (for hashing while scanning), sharing everything.
     Read,
+    /// Read attributes and the owner and access list (for the helper's location check).
+    Security,
 }
 
 /// Why a target could not be opened.
@@ -126,6 +132,7 @@ pub fn open_no_follow(path: &WinPath, access: Access) -> Result<Opened, OpenErro
             Access::Move => DELETE | FILE_READ_DATA,
             Access::List => FILE_LIST_DIRECTORY,
             Access::Read => FILE_READ_DATA,
+            Access::Security => READ_CONTROL,
         };
     // SAFETY: `wide` is a NUL-terminated UTF-16 string that outlives the call; the other
     // arguments are plain flags and null pointers, which CreateFileW accepts.

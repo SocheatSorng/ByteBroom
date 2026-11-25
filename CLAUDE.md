@@ -20,6 +20,11 @@ README's commands in step (a docs-drift test checks them).
   Both scan and clean the real PC, so only the owner runs them. Claude checks the window's look
   through the fake-data harness instead: `node tools/ui-harness/serve.mjs` (or `preview_start`
   `ui-harness`), and the `bytebroom-ui-designer` agent.
+- The elevated helper (phase 4): `crates/admin` builds `bytebroom-admin.exe` (also made by
+  `./build.ps1`). It runs only from `Program Files\ByteBroom`, put there by the owner with
+  `./tools/install-helper.ps1` in an administrator PowerShell. Its fixed actions, exit codes and
+  location rule are in `crates/core/src/admin.rs`. Claude never runs it elevated: the UAC round
+  trip (`cargo run --release -p bytebroom-admin --example elevate_noop`) is the owner's to run.
 - The page↔Rust boundary is pinned by `src-tauri/tests/boundary.rs`; a new command, parameter type,
   permission or dependency means changing that test on purpose and a security review.
 - Speed test (ignored by default, writes 200,000 files to temp):
