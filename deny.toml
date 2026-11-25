@@ -21,6 +21,16 @@ allow = [
   "Zlib",
 ]
 confidence-threshold = 0.9
+# MPL-2.0 (file-level copyleft: using these unmodified is fine under MIT) only for the crates Tauri
+# needs: the CSS/HTML parser tauri-utils uses for the CSP, and `dirs`' helper. No other crate may
+# bring MPL-2.0 in without a review.
+exceptions = [
+  { allow = ["MPL-2.0"], crate = "cssparser" },
+  { allow = ["MPL-2.0"], crate = "cssparser-macros" },
+  { allow = ["MPL-2.0"], crate = "dtoa-short" },
+  { allow = ["MPL-2.0"], crate = "selectors" },
+  { allow = ["MPL-2.0"], crate = "option-ext" },
+]
 # The list is kept ready for the Tauri app (phase 3); don't warn about entries no crate uses yet.
 unused-allowed-license = "allow"
 

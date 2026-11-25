@@ -1,0 +1,14 @@
+{
+  "identifier": "main",
+  "description": "The ByteBroom window may call ByteBroom's own commands and nothing else.",
+  "windows": ["main"],
+  "permissions": [
+    "allow-start-scan",
+    "allow-cancel-scan",
+    "allow-scan-state",
+    "allow-preview",
+    "allow-clean",
+    "allow-pick-move-destination",
+    "allow-open-recycle-bin"
+  ]
+}

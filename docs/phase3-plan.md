@@ -102,7 +102,7 @@ Each task: code → tests → fmt + clippy → full tests → commit with a "why
   - Acceptance: the new names and extensions are in `rules.rs` and in the README list (docs-drift);
     the walker never lists them and the engine never acts on them.
   - Tests: the existing never-listed tests (rules, walker, engine) cover every new entry.
-- [ ] **1. App skeleton and the boundary**
+- [x] **1. App skeleton and the boundary**
   - Acceptance:
     - `cargo tauri dev` opens an empty ByteBroom window;
     - `./check.ps1` still covers the whole workspace, and `./build.ps1` builds the app.
