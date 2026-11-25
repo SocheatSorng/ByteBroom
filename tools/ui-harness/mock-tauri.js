@@ -235,6 +235,44 @@
     open_recycle_bin() {
       return null;
     },
+    // Fake texts shaped like bytebroom_core::red_actions; nothing real is touched.
+    red_actions() {
+      const note =
+        "A restore point is made first (or one from the last 24 hours is used); without one, nothing is changed.";
+      return [
+        {
+          id: "RecycleBin",
+          title: "Empty the Recycle Bin",
+          frees: "Frees the space the Recycle Bin uses on every drive.",
+          undo: "Can't be undone: the files are gone for good.",
+          confirmWord: "recycle bin",
+          restoreNote: null,
+          needsAdmin: false,
+        },
+        {
+          id: "DeliveryOptimization",
+          title: "Clear the Delivery Optimization cache",
+          frees: "Frees Windows' cache of update downloads shared with other PCs; pinned files are kept.",
+          undo: "Can't be undone; Windows downloads again what it needs.",
+          confirmWord: "delivery optimization",
+          restoreNote: note,
+          needsAdmin: true,
+        },
+        {
+          id: "Hibernation",
+          title: "Turn hibernation off",
+          frees: "Frees hiberfil.sys. Hibernate and Hybrid Sleep stop working until you turn it back on.",
+          undo: "Undo: run powercfg /hibernate on in an administrator PowerShell.",
+          confirmWord: "hibernation",
+          restoreNote: note,
+          needsAdmin: true,
+        },
+      ];
+    },
+    run_red_action({ action }) {
+      if (action === "Hibernation") throw new Error("Cancelled at the Windows prompt: nothing was changed.");
+      return { message: `${action}: done.`, red };
+    },
   };
 
   window.__TAURI__ = {

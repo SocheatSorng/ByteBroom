@@ -292,6 +292,81 @@ fn open_recycle_bin(layout: State<'_, Layout>) -> Reply<()> {
         .map_err(|_| CommandError::new("Explorer could not be opened"))
 }
 
+/// The red tier's actions and their texts (phase 4).
+#[tauri::command]
+fn red_actions() -> Vec<view::RedActionView> {
+    view::red_action_views()
+}
+
+/// Do one red-tier action the owner confirmed on the page, then measure the red sizes again.
+/// The page's typed confirm can be skipped by a page, so a native question always comes first:
+/// Windows' own dialog for the Recycle Bin (decision 8), the UAC prompt for the rest; the
+/// helper then makes a restore point before changing anything (decision 5).
+#[tauri::command]
+async fn run_red_action(
+    app: AppHandle,
+    layout: State<'_, Layout>,
+    action: boundary::RedActionId,
+) -> Reply<view::RedActionResult> {
+    let layout = layout.0.clone();
+    let base = local_app_data(&layout);
+    let message = tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
+        let red = action.action();
+        match red.admin_action() {
+            None => {
+                let verdict = confirm::ask_empty_recycle_bin(&app, base.as_ref());
+                if let Some(why) = confirm::refusal(verdict) {
+                    return Err(why.to_string());
+                }
+                let parent = confirm::main_window(&app).unwrap_or(0);
+                bytebroom_core::win::recycle::empty_recycle_bin(parent)
+                    .map(|()| "The Recycle Bin was emptied.".to_string())
+                    .map_err(|_| {
+                        "Windows did not empty the Recycle Bin (it may already be empty)."
+                            .to_string()
+                    })
+            }
+            Some(admin) => {
+                use bytebroom_core::win::admin::{LaunchError, run_elevated};
+                let parent = confirm::main_window(&app).unwrap_or(0);
+                match run_elevated(admin, parent) {
+                    Ok(bytebroom_core::admin::Exit::Done) => {
+                        Ok(format!("{}: done.", red.title()))
+                    }
+                    Ok(exit) => Err(format!("{}: {}.", red.title(), exit.describe())),
+                    Err(LaunchError::Cancelled) => {
+                        Err("Cancelled at the Windows prompt: nothing was changed.".to_string())
+                    }
+                    Err(LaunchError::NotInstalled) => Err(
+                        "The helper isn't installed: run ./tools/install-helper.ps1 as administrator. Nothing was changed."
+                            .to_string(),
+                    ),
+                    Err(LaunchError::Untrusted(why)) => {
+                        Err(format!("The helper wasn't started: {why}. Nothing was changed."))
+                    }
+                    Err(LaunchError::Failed(why)) => {
+                        Err(format!("The helper couldn't run: {why}."))
+                    }
+                }
+            }
+        }
+    })
+    .await
+    .map_err(|_| CommandError::new("the action could not run"))?
+    .map_err(|e| CommandError::new(&e))?;
+    let red = tauri::async_runtime::spawn_blocking(move || {
+        use bytebroom_core::walk::WalkOptions;
+        let at = bytebroom_core::win::locations::locations(&layout);
+        bytebroom_core::win::red::red_sizes(&at, &layout, &WalkOptions::default())
+    })
+    .await
+    .map_err(|_| CommandError::new("the sizes could not be measured again"))?;
+    Ok(view::RedActionResult {
+        message,
+        red: view::red_views(&red),
+    })
+}
+
 /// True for the app's own pages; the window never navigates anywhere else.
 pub fn is_app_url(url: &tauri::Url) -> bool {
     matches!(
@@ -314,6 +389,8 @@ pub fn run() -> tauri::Result<()> {
             clean,
             pick_move_destination,
             open_recycle_bin,
+            red_actions,
+            run_red_action,
         ])
         .setup(|app| {
             WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))

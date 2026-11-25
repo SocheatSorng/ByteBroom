@@ -142,7 +142,7 @@ impl fmt::Display for PreviewError {
             Self::Unknown(n) => write!(f, "item {n} is not in the scan"),
             Self::RedTier(_) => write!(
                 f,
-                "Windows' own areas are freed in a later version, through Windows' own tools"
+                "Windows' own areas are freed only by the red tier's own buttons, through Windows' own tools"
             ),
             Self::ChosenTwice(_) => write!(f, "an item was chosen twice with different actions"),
             Self::Conflict { .. } => write!(

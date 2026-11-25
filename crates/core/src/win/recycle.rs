@@ -143,6 +143,25 @@ pub fn shell_recycle(path: &WinPath) -> Result<Option<WinPath>, i32> {
     super::fileop::recycle_reporting(path)
 }
 
+/// Empty the owner's Recycle Bin on every drive (phase 4, decision 8), owned by `parent` (the
+/// main window), with no shell prompt: the window has already asked in Windows' own dialog.
+/// `Err` carries the shell's code. Never call this from a test: it empties the real bin.
+pub fn empty_recycle_bin(parent: isize) -> Result<(), i32> {
+    use windows_sys::Win32::UI::Shell::{
+        SHERB_NOCONFIRMATION, SHERB_NOPROGRESSUI, SHERB_NOSOUND, SHEmptyRecycleBinW,
+    };
+    // SAFETY: a null root means "all Recycle Bins on all drives"; `parent` is the main
+    // window's handle (or 0).
+    let hr = unsafe {
+        SHEmptyRecycleBinW(
+            parent as _,
+            std::ptr::null(),
+            SHERB_NOCONFIRMATION | SHERB_NOPROGRESSUI | SHERB_NOSOUND,
+        )
+    };
+    if hr < 0 { Err(hr) } else { Ok(()) }
+}
+
 /// Does anything (file, folder or link) exist at `path`? Does not follow links.
 pub fn exists(path: &WinPath) -> bool {
     std::fs::symlink_metadata(format!("\\\\?\\{path}")).is_ok()

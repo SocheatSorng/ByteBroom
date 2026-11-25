@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 /// Every command the window may call. Adding one is a security decision: update this list, the
 /// capability file and `build.rs` together, and have the change reviewed.
-const COMMANDS: [&str; 7] = [
+const COMMANDS: [&str; 9] = [
     "start_scan",
     "cancel_scan",
     "scan_state",
@@ -17,11 +17,20 @@ const COMMANDS: [&str; 7] = [
     "clean",
     "pick_move_destination",
     "open_recycle_bin",
+    "red_actions",
+    "run_red_action",
 ];
 
 /// The only parameter types a command may take: IDs and fixed choices (see `boundary.rs`), or
 /// things Tauri itself provides (never sent by the page).
-const PARAM_TYPES: [&str; 5] = ["Vec<Choice>", "PreviewId", "u32", "AppHandle", "State<"];
+const PARAM_TYPES: [&str; 6] = [
+    "Vec<Choice>",
+    "PreviewId",
+    "boundary::RedActionId",
+    "u32",
+    "AppHandle",
+    "State<",
+];
 // `State<` is matched as a prefix: Tauri fills it from the app, never from the page.
 
 /// Type names that could carry text or a path from the page.
@@ -452,5 +461,41 @@ fn the_page_loads_nothing_remote_and_runs_no_inline_code() {
                 assert!(!lower.contains(bad), "{name} uses {bad}");
             }
         }
+    }
+}
+
+/// Phase 4: the page's typed confirm can be skipped by a page, so `run_red_action` asks
+/// natively first: Windows' own dialog before emptying the Recycle Bin, and the UAC prompt (the
+/// helper) for the rest. The page sends only a fixed choice.
+#[test]
+fn red_actions_ask_natively_before_acting() {
+    let lib = read("src/lib.rs");
+    let body = lib
+        .split("async fn run_red_action(")
+        .nth(1)
+        .and_then(|s| s.split("\n}\n").next())
+        .expect("run_red_action");
+    let ask = body
+        .find("ask_empty_recycle_bin")
+        .expect("asks before emptying");
+    let refusal = body
+        .find("confirm::refusal(verdict)")
+        .expect("acts on the answer");
+    let empty = body
+        .find("empty_recycle_bin(parent)")
+        .expect("empties the bin");
+    assert!(
+        ask < refusal && refusal < empty,
+        "the dialog comes before emptying"
+    );
+    assert!(body.contains("run_elevated(admin, parent)"));
+    // The emptying function is called nowhere else in the app.
+    assert_eq!(lib.matches("recycle::empty_recycle_bin(").count(), 1);
+    let confirm = read("src/confirm.rs");
+    assert!(confirm.contains("pub const EMPTY_IT: &str = \"Empty it\";"));
+    // The page sends a fixed enum, whose variants match the core's actions.
+    let boundary = read("src/boundary.rs");
+    for v in ["RecycleBin", "DeliveryOptimization", "Hibernation"] {
+        assert!(boundary.contains(&format!("    {v},")), "{v}");
     }
 }

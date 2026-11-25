@@ -11,6 +11,8 @@ const COMMANDS: &[&str] = &[
     "clean",
     "pick_move_destination",
     "open_recycle_bin",
+    "red_actions",
+    "run_red_action",
 ];
 
 fn main() {

@@ -452,6 +452,46 @@ select {
   border-top: none;
 }
 
+.red-actions-h {
+  margin: 16px 0 4px;
+  font-size: 1rem;
+}
+
+.red-actions {
+  display: grid;
+  gap: 10px;
+}
+
+.red-action {
+  padding: 10px 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--red);
+  border-radius: 5px;
+}
+
+.red-action h4 {
+  margin: 0 0 4px;
+  font-size: 0.95rem;
+}
+
+.red-action-text {
+  margin: 0 0 8px;
+  color: var(--muted);
+}
+
+.red-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.red-action-row input {
+  flex: 1 1 160px;
+  min-width: 0;
+}
+
 .side {
   align-self: start;
   min-width: 0;

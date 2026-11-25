@@ -400,6 +400,89 @@
     }
   }
 
+  // ---- Red-tier actions (phase 4) ----------------------------------------------------------
+  // The page sends only a fixed action name. Typing the word is the page's own check (decision
+  // 7); Rust then asks natively (Windows' dialog, or the UAC prompt) before anything happens.
+
+  let redBusy = false;
+
+  function renderRedActions(actions) {
+    const box = $("red-actions");
+    box.replaceChildren();
+    for (const a of actions) {
+      const inputId = `confirm-${a.id}`;
+      const helpId = `help-${a.id}`;
+      const input = el("input", {
+        id: inputId,
+        type: "text",
+        autocomplete: "off",
+        spellcheck: false,
+        attrs: { "aria-describedby": helpId, "data-focus": `red-input-${a.id}` },
+      });
+      const button = el("button", {
+        type: "button",
+        className: "danger",
+        text: a.title,
+        disabled: true,
+        attrs: { "data-focus": `red-run-${a.id}` },
+      });
+      const matches = () => input.value.trim().toLowerCase() === a.confirmWord;
+      input.addEventListener("input", () => {
+        button.disabled = redBusy || !matches();
+      });
+      button.addEventListener("click", () => {
+        if (matches()) runRedAction(a, input, button);
+      });
+      box.append(
+        el(
+          "div",
+          { className: "red-action" },
+          el("h4", { text: a.title }),
+          el(
+            "p",
+            { id: helpId, className: "red-action-text" },
+            `${a.frees} ${a.undo}`,
+            a.restoreNote ? ` ${a.restoreNote}` : "",
+            a.needsAdmin ? " Windows will ask for administrator rights." : "",
+          ),
+          el(
+            "div",
+            { className: "red-action-row" },
+            el("label", { htmlFor: inputId, text: `Type "${a.confirmWord}" to confirm` }),
+            input,
+            button,
+          ),
+        ),
+      );
+    }
+  }
+
+  async function runRedAction(a, input, button) {
+    redBusy = true;
+    for (const b of $("red-actions").querySelectorAll("button")) b.disabled = true;
+    setStatus(
+      a.needsAdmin
+        ? `${a.title}: answer the Windows prompt. A restore point comes first; this can take a few minutes.`
+        : `${a.title}: answer the Windows dialog.`,
+    );
+    try {
+      const result = await invoke("run_red_action", { action: a.id });
+      renderRed(result.red);
+      setStatus(`${result.message} Sizes measured again.`);
+    } catch (e) {
+      setStatus(errorText(e), true);
+    } finally {
+      redBusy = false;
+      input.value = "";
+      button.disabled = true;
+      input.focus();
+    }
+  }
+
+  invoke("red_actions")
+    .then(renderRedActions)
+    .catch((e) => setStatus(errorText(e), true));
+
   function renderUnscanned(skipped) {
     $("unscanned-box").hidden = skipped.length === 0;
     const list = $("unscanned");

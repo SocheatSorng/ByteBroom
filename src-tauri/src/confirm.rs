@@ -103,6 +103,55 @@ pub fn ask<R: Runtime>(
     items: usize,
     local_app_data: Option<&WinPath>,
 ) -> Verdict {
+    ask_with(
+        app,
+        &Question {
+            title: TITLE,
+            text: question,
+            confirm: CLEAN_THEM,
+        },
+        items,
+        local_app_data,
+    )
+}
+
+/// The dialog's title before emptying the Recycle Bin (phase 4, decision 8).
+pub const EMPTY_TITLE: &str = "ByteBroom: empty the Recycle Bin?";
+/// The button that empties it. Only this button goes ahead.
+pub const EMPTY_IT: &str = "Empty it";
+
+/// Ask, in the same dialog with the same rules (Cancel the default, too-fast answers cancel,
+/// logged), before emptying the Recycle Bin, which can't be undone.
+pub fn ask_empty_recycle_bin<R: Runtime>(
+    app: &AppHandle<R>,
+    local_app_data: Option<&WinPath>,
+) -> Verdict {
+    ask_with(
+        app,
+        &Question {
+            title: EMPTY_TITLE,
+            text: "Everything in the Recycle Bin, on every drive, will be deleted for good. This can't be undone, and a restore point doesn't bring it back.",
+            confirm: EMPTY_IT,
+        },
+        0,
+        local_app_data,
+    )
+}
+
+/// The main window's handle, if it has one.
+pub fn main_window<R: Runtime>(app: &AppHandle<R>) -> Option<isize> {
+    app.get_webview_window("main")
+        .and_then(|w| w.hwnd().ok())
+        .map(|h| h.0 as isize)
+        .filter(|h| *h != 0)
+}
+
+fn ask_with<R: Runtime>(
+    app: &AppHandle<R>,
+    question: &Question,
+    items: usize,
+    local_app_data: Option<&WinPath>,
+) -> Verdict {
     let parent = app
         .get_webview_window("main")
         .and_then(|w| w.hwnd().ok())
@@ -116,14 +165,7 @@ pub fn ask<R: Runtime>(
         );
         return v;
     };
-    let asked = taskdialog::ask(
-        parent,
-        &Question {
-            title: TITLE,
-            text: question,
-            confirm: CLEAN_THEM,
-        },
-    );
+    let asked = taskdialog::ask(parent, question);
     let v = verdict(&asked);
     log(
         local_app_data,

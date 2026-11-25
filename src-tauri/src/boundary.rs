@@ -26,6 +26,36 @@ pub enum Action {
     Move,
 }
 
+/// A red-tier action the owner asked for (phase 4): a fixed choice, never text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
+pub enum RedActionId {
+    /// Empty the Recycle Bin (in the window, no helper).
+    RecycleBin,
+    /// Clear the Delivery Optimization cache (helper).
+    DeliveryOptimization,
+    /// Turn hibernation off (helper).
+    Hibernation,
+}
+
+impl RedActionId {
+    /// Every choice, in the window's order (matches `RedAction::ALL`).
+    pub const ALL: [RedActionId; 3] = [
+        RedActionId::RecycleBin,
+        RedActionId::DeliveryOptimization,
+        RedActionId::Hibernation,
+    ];
+
+    /// The core action it names.
+    pub fn action(self) -> bytebroom_core::red_actions::RedAction {
+        use bytebroom_core::red_actions::RedAction;
+        match self {
+            Self::RecycleBin => RedAction::RecycleBin,
+            Self::DeliveryOptimization => RedAction::DeliveryOptimization,
+            Self::Hibernation => RedAction::Hibernation,
+        }
+    }
+}
+
 /// One line of the owner's choices.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]

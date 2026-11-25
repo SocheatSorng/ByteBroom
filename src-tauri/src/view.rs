@@ -61,6 +61,60 @@ pub struct RedView {
     pub bytes: Option<u64>,
 }
 
+/// One red-tier action, as the window offers it (texts from `bytebroom_core::red_actions`).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RedActionView {
+    /// The fixed choice the page sends back.
+    pub id: crate::boundary::RedActionId,
+    /// The button's text.
+    pub title: &'static str,
+    /// What it frees.
+    pub frees: &'static str,
+    /// Whether, and how, it can be undone.
+    pub undo: &'static str,
+    /// The word the owner types to confirm (decision 7).
+    pub confirm_word: &'static str,
+    /// Said before a helper action: a restore point comes first.
+    pub restore_note: Option<&'static str>,
+    /// Whether Windows will ask for administrator rights (UAC).
+    pub needs_admin: bool,
+}
+
+/// Every red-tier action the window offers. Pure.
+pub fn red_action_views() -> Vec<RedActionView> {
+    crate::boundary::RedActionId::ALL
+        .into_iter()
+        .map(|id| {
+            let a = id.action();
+            RedActionView {
+                id,
+                title: a.title(),
+                frees: a.frees(),
+                undo: a.undo(),
+                confirm_word: a.confirm_word(),
+                restore_note: a.restore_note(),
+                needs_admin: a.admin_action().is_some(),
+            }
+        })
+        .collect()
+}
+
+/// What a red-tier action did, with the red sizes measured again.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RedActionResult {
+    /// What happened, in words for the owner.
+    pub message: String,
+    /// The red-tier sizes, measured again afterwards.
+    pub red: Vec<RedView>,
+}
+
+/// The red sizes as the page shows them.
+pub fn red_views(red: &[RedFinding]) -> Vec<RedView> {
+    red.iter().map(red_view).collect()
+}
+
 /// A location that is not scanned.
 #[derive(Debug, Clone, Serialize)]
 pub struct UnscannedView {

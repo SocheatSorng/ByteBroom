@@ -9,6 +9,8 @@
     "allow-preview",
     "allow-clean",
     "allow-pick-move-destination",
-    "allow-open-recycle-bin"
+    "allow-open-recycle-bin",
+    "allow-red-actions",
+    "allow-run-red-action"
   ]
 }
