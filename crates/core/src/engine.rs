@@ -36,6 +36,9 @@ pub enum SkipReason {
     Failed(String),
     /// Recycling would turn into a permanent delete (no bin, bin off, too big).
     CannotRecycle(String),
+    /// It changed since the scan (another file in its place, new contents, recent use, or a
+    /// duplicate that no longer matches its kept copy), so it is not what the owner confirmed.
+    ChangedSinceScan(&'static str),
 }
 
 impl fmt::Display for SkipReason {
@@ -50,6 +53,7 @@ impl fmt::Display for SkipReason {
             Self::Unsupported(why) => write!(f, "unsupported: {why}"),
             Self::Failed(why) => write!(f, "could not delete: {why}"),
             Self::CannotRecycle(why) => write!(f, "{why}"),
+            Self::ChangedSinceScan(what) => write!(f, "changed since the scan: {what}"),
         }
     }
 }

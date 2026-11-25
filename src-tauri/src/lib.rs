@@ -18,7 +18,7 @@ use session::{Reporter, Session};
 use std::sync::Arc;
 use std::time::SystemTime;
 use tauri::{AppHandle, State, WebviewUrl, WebviewWindowBuilder};
-use view::{PreviewView, ScanView};
+use view::{CleanView, PreviewView, ScanView};
 
 /// An error the page can show. Text goes out to the page only, never in.
 #[derive(Debug, Clone, Serialize)]
@@ -36,8 +36,6 @@ impl CommandError {
 }
 
 type Reply<T> = Result<T, CommandError>;
-
-const NOT_YET: &str = "not built yet";
 
 /// The real scan of this PC, run on the session's thread. Only reads.
 fn scan_this_pc(r: Reporter) {
@@ -129,11 +127,44 @@ pub fn destination_problem(
     denied_reason(dest, layout).map(|why| format!("that folder is protected ({why})"))
 }
 
-/// Act on exactly the confirmed preview, once.
+/// Where moves are journalled: `ByteBroom\moves.journal` in the owner's local app data, outside
+/// any repo. `None` when that folder can't be found or made.
+fn journal_path(layout: &SystemLayout) -> Option<std::path::PathBuf> {
+    let at = bytebroom_core::win::locations::locations(layout);
+    let dir = std::path::PathBuf::from(at.local_app_data?.to_string()).join("ByteBroom");
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir.join("moves.journal"))
+}
+
+/// Act on exactly the confirmed preview, once: Rust takes the preview it built (the page sends
+/// only its ID), checks every item again right before acting, and reports what happened.
 #[tauri::command]
-fn clean(preview_id: PreviewId) -> Reply<()> {
-    let _ = preview_id;
-    Err(CommandError::new(NOT_YET))
+async fn clean(
+    session: State<'_, Arc<Session>>,
+    layout: State<'_, Layout>,
+    preview_id: PreviewId,
+) -> Reply<CleanView> {
+    let ready = session
+        .take_preview(preview_id)
+        .map_err(|e| CommandError::new(&e))?;
+    let layout = layout.0.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let journal = journal_path(&layout).ok_or_else(|| {
+            CommandError::new("ByteBroom's folder in local app data can't be made")
+        })?;
+        let ctx = bytebroom_core::act::Context {
+            layout: &layout,
+            now: SystemTime::now(),
+            journal: &journal,
+            recycle: &bytebroom_core::recycle::recycle,
+        };
+        let results = bytebroom_core::act::carry_out(&ready.findings, &ready.preview, &ctx);
+        Ok(view::clean_view(&results, ready.preview.move_to.as_ref()))
+    })
+    .await
+    .map_err(|_| {
+        CommandError::new("the clean stopped unexpectedly; scan again to see what is left")
+    })?
 }
 
 /// Ask the owner for a move destination with Windows' own folder dialog, run by Rust (the page
@@ -177,10 +208,16 @@ async fn pick_move_destination(
     Ok(Some(dest.to_string()))
 }
 
-/// Open the Recycle Bin in Explorer, so the owner can restore or empty it.
+/// Open the Recycle Bin in Explorer, so the owner can restore or empty it. Runs Windows' own
+/// Explorer from the Windows folder, with a fixed argument.
 #[tauri::command]
-fn open_recycle_bin() -> Reply<()> {
-    Err(CommandError::new(NOT_YET))
+fn open_recycle_bin(layout: State<'_, Layout>) -> Reply<()> {
+    let explorer = std::path::PathBuf::from(layout.0.system_root.to_string()).join("explorer.exe");
+    std::process::Command::new(explorer)
+        .arg("shell:RecycleBinFolder")
+        .spawn()
+        .map(|_| ())
+        .map_err(|_| CommandError::new("Explorer could not be opened"))
 }
 
 /// True for the app's own pages; the window never navigates anywhere else.

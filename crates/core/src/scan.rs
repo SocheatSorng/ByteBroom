@@ -800,6 +800,53 @@ fn has_marker(project: &WinPath, markers: &[&str]) -> bool {
     })
 }
 
+/// The 24-hour rule again, right before acting (security review F1): the names of the items
+/// directly inside `root` that a rule keeping items fresh for `hours` would **not** offer now,
+/// because something in them changed within `hours` of `now` or part of them can't be read.
+/// `None` when `root` itself is no longer a real folder there, so nothing in it can be checked.
+/// Only reads.
+pub fn too_fresh_now(
+    root: &WinPath,
+    layout: &SystemLayout,
+    now: SystemTime,
+    hours: u64,
+) -> Option<std::collections::BTreeSet<String>> {
+    let at = Locations::default();
+    let mut s = Scanner {
+        at: &at,
+        layout,
+        opts: WalkOptions::default(),
+        now,
+        report: ScanReport::default(),
+        search: None,
+    };
+    let root = s.real_folder(root)?;
+    let items = s.tally_children(&root);
+    if s.report.walked.unreadable > 0 && items.is_empty() {
+        return None;
+    }
+    Some(
+        items
+            .into_iter()
+            .filter(|(_, t)| t.too_fresh(now, hours))
+            .map(|(name, _)| name)
+            .collect(),
+    )
+}
+
+/// SHA-256 of the whole file at `path`, which must still be a plain file of `len` bytes there.
+/// Used to check, right before acting, that a duplicate still matches its kept copy. Only reads.
+pub fn hash_whole_file(path: &WinPath, len: u64) -> Option<String> {
+    hash_file(
+        &Candidate {
+            path: path.clone(),
+            len,
+            modified: UNIX_EPOCH,
+        },
+        None,
+    )
+}
+
 /// Scan the green and amber rules in `at`. Only reads.
 pub fn scan(at: &Locations, layout: &SystemLayout, opts: &ScanOptions) -> ScanReport {
     scan_in_steps(at, layout, opts, |_| {})

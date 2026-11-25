@@ -128,7 +128,7 @@ Each task: code → tests → fmt + clippy → full tests → commit with a "why
 
     Unknown or stale IDs are refused, and red can't be chosen.
   - Tests: pure, table-driven, every action × tier × drive case.
-- [ ] **4. Clean, with the check right before acting**
+- [x] **4. Clean, with the check right before acting**
   - Acceptance:
     - `clean(preview_id)` acts only on that preview, once;
     - the F1 identity check, the duplicate re-hash and the 24-hour rule run right before acting;

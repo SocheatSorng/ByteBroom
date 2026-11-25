@@ -104,6 +104,8 @@ pub struct Opened {
     pub link_count: u32,
     /// Serial number of the volume the object lives on.
     pub volume_serial: u32,
+    /// When its contents last changed (the same clock the walk reports).
+    pub modified: std::time::SystemTime,
 }
 
 fn wide_verbatim(path: &WinPath) -> Vec<u16> {
@@ -181,6 +183,10 @@ pub fn open_no_follow(path: &WinPath, access: Access) -> Result<Opened, OpenErro
         },
         link_count: info.nNumberOfLinks,
         volume_serial: info.dwVolumeSerialNumber,
+        modified: crate::walk::from_file_time(
+            ((i64::from(info.ftLastWriteTime.dwHighDateTime)) << 32)
+                | i64::from(info.ftLastWriteTime.dwLowDateTime),
+        ),
     })
 }
 

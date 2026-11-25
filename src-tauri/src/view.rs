@@ -3,6 +3,8 @@
 
 use crate::boundary::{FindingId, PreviewId};
 use crate::session::{Ready, Snapshot};
+use bytebroom_core::act::ActionResult;
+use bytebroom_core::paths::WinPath;
 use bytebroom_core::policy::SystemLayout;
 use bytebroom_core::preview::{NotOffered, Note, not_offered, note};
 use bytebroom_core::red::{RedFinding, RedSize};
@@ -61,7 +63,7 @@ pub struct RedView {
 
 /// A location that is not scanned.
 #[derive(Debug, Clone, Serialize)]
-pub struct SkippedView {
+pub struct UnscannedView {
     /// Which location.
     pub location: &'static str,
     /// Why.
@@ -89,7 +91,7 @@ pub struct ScanView {
     /// Red-tier sizes, once measured.
     pub red: Option<Vec<RedView>>,
     /// Locations that are not scanned.
-    pub skipped: Vec<SkippedView>,
+    pub skipped: Vec<UnscannedView>,
 }
 
 /// One item in a preview.
@@ -210,6 +212,78 @@ pub fn preview_view(ready: &Ready) -> PreviewView {
     }
 }
 
+/// An item that stayed, and why.
+#[derive(Debug, Clone, Serialize)]
+pub struct SkippedView {
+    /// Its path, to show.
+    pub path: String,
+    /// Why it stayed, in words.
+    pub reason: String,
+}
+
+/// What one action did.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActionDone {
+    /// "delete", "move" or "recycle".
+    pub action: &'static str,
+    /// Files and folders that are gone from where they were.
+    pub removed: usize,
+    /// Bytes that really came back.
+    pub bytes_freed: u64,
+    /// Bytes now in the Recycle Bin (they come back when it is emptied).
+    pub bytes_recycled: u64,
+    /// Bytes moved to the destination.
+    pub bytes_moved: u64,
+    /// Items that stayed, and why.
+    pub skipped: Vec<SkippedView>,
+    /// Items that are gone but need a look (e.g. not found in the bin afterwards).
+    pub warnings: Vec<SkippedView>,
+}
+
+/// The result screen.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanView {
+    /// One entry per action.
+    pub actions: Vec<ActionDone>,
+    /// Bytes that came back now (deleted, and moved to another drive).
+    pub freed_now: u64,
+    /// Bytes in the Recycle Bin (they come back when it is emptied).
+    pub recycled: u64,
+    /// Where moved items went.
+    pub move_to: Option<String>,
+}
+
+fn skipped_view(s: &bytebroom_core::engine::Skipped) -> SkippedView {
+    SkippedView {
+        path: s.path.to_string(),
+        reason: s.reason.to_string(),
+    }
+}
+
+/// The page's view of what a clean did. Honest: only the engine's own counts.
+pub fn clean_view(results: &[ActionResult], move_to: Option<&WinPath>) -> CleanView {
+    let actions: Vec<ActionDone> = results
+        .iter()
+        .map(|r| ActionDone {
+            action: action_name(r.action),
+            removed: r.outcome.removed.len(),
+            bytes_freed: r.outcome.bytes_freed,
+            bytes_recycled: r.outcome.bytes_recycled,
+            bytes_moved: r.outcome.bytes_moved,
+            skipped: r.outcome.skipped.iter().map(skipped_view).collect(),
+            warnings: r.outcome.warnings.iter().map(skipped_view).collect(),
+        })
+        .collect();
+    CleanView {
+        freed_now: actions.iter().map(|a| a.bytes_freed + a.bytes_moved).sum(),
+        recycled: actions.iter().map(|a| a.bytes_recycled).sum(),
+        actions,
+        move_to: move_to.map(ToString::to_string),
+    }
+}
+
 fn seconds(t: SystemTime) -> u64 {
     t.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }
@@ -282,7 +356,7 @@ pub fn scan_view(snap: &Snapshot, seen: u32, layout: &SystemLayout) -> ScanView 
         skipped: snap
             .skipped
             .iter()
-            .map(|s| SkippedView {
+            .map(|s| UnscannedView {
                 location: s.which.label(),
                 why: s.why.clone(),
             })
