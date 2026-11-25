@@ -134,32 +134,141 @@ Decided by the owner on 2026-11-25:
 3. **Red items with an action in V1:**
    - empty the Recycle Bin;
    - clear the Delivery Optimization cache;
-   - shrink the hibernation file.
+   - turn hibernation off (decision 4).
 
-   Information only, with a button to Windows' own page where one exists:
+   Information only (task 0 says which have a Windows page to open):
    - the component store (DISM);
    - old restore points;
    - Windows.old and the Update store;
    - the page file.
-4. **Hibernation file:** shrink it (`powercfg /h /type reduced`). Fast Startup keeps working;
-   Hibernate leaves the power menu. Undo: `powercfg /h /type full`.
-5. **Restore point:** automatic, before each action. A restore point from the last 24 hours
-   counts. If System Restore is off or the restore point fails, the action stops and says why.
+4. **Hibernation file:** turn hibernation off (`powercfg /hibernate off`); revised by the owner
+   on 2026-11-25 after task 0.
+   - It removes `hiberfil.sys`. Hibernate and Hybrid Sleep stop working; Fast Startup is
+     already disabled by policy on the owner's PC.
+   - Undo: `powercfg /hibernate on`.
+   - (The first answer, "reduced", only keeps Fast Startup, which is off here.)
+5. **Restore point:** automatic, before each elevated action. A restore point from the last
+   24 hours counts. If System Restore is off or the restore point fails, the action stops and
+   says why.
 6. **Admin-only green items:** not in phase 4. The helper never deletes files.
 7. **Typed confirm:** the action's short name ("recycle bin", "delivery optimization",
    "hibernation"), ignoring case.
+8. **Empty the Recycle Bin** (owner, 2026-11-25, after task 0): in the unelevated window, with
+   no helper, no UAC prompt and no restore point.
+   - It needs no administrator rights, and a restore point can't bring emptied files back.
+   - It still takes the typed confirm "recycle bin" and says it can't be undone.
+
+   The helper's actions are therefore: restore point, Delivery Optimization cache, hibernation
+   off.
 
 ## Tasks (riskiest first)
 
 Each task: code → tests → fmt + clippy → full tests → build → commit with a "why" message.
 
-- [ ] **0. Check each tool against Microsoft's documentation**
-  - For every red item, record in this plan:
-    - the Windows tool and its exact arguments;
-    - whether it needs administrator rights;
-    - what it frees, and whether it can be undone;
-    - a link to Microsoft Learn.
-  - Anything not documented by Microsoft is dropped or made information only.
+- [x] **0. Check each tool against Microsoft's documentation** (2026-11-25)
+
+  Read on Microsoft Learn and Microsoft Support. "Not stated" means the page doesn't say; it
+  is checked on the owner's PC or treated as unknown, never assumed. Read-only checks on the
+  owner's PC: `Get-Command Delete-DeliveryOptimizationCache` and `powercfg /a`.
+
+  **Actions (decision 3)**
+
+  - **Empty the Recycle Bin:** `SHEmptyRecycleBinW(hwnd, NULL, SHERB_NOCONFIRMATION |
+    SHERB_NOPROGRESSUI | SHERB_NOSOUND)`.
+    - A `NULL` root empties "all Recycle Bins on all drives"; it returns `S_OK` or an
+      `HRESULT`.
+    - No administrator requirement is stated: it is the user's own bin.
+    - It can't be undone: the files are gone for good.
+    - [SHEmptyRecycleBinW](https://learn.microsoft.com/en-us/windows/win32/api/shellapi/nf-shellapi-shemptyrecyclebinw)
+  - **Clear the Delivery Optimization cache:** `Delete-DeliveryOptimizationCache -Force`
+    (module `DeliveryOptimization`), in Windows PowerShell started from `System32` by full path.
+    - Without `-IncludePinnedFiles`, pinned files are kept.
+    - It needs "an elevated PowerShell session".
+    - "Deletion can't be undone"; Windows re-downloads what it needs. The FAQ says Windows also
+      clears this cache itself after a while, or when it grows too big.
+    - **On the owner's PC:** the cmdlet is present (DeliveryOptimization 1.0.2.0, Windows 10
+      19045).
+    - [Delete-DeliveryOptimizationCache](https://learn.microsoft.com/en-us/powershell/module/deliveryoptimization/delete-deliveryoptimizationcache),
+      [Delivery Optimization FAQ](https://learn.microsoft.com/en-us/windows/deployment/do/waas-delivery-optimization-faq)
+  - **Hibernation file:** `powercfg /hibernate /type reduced | full`, `powercfg /hibernate off | on`.
+    - Microsoft: "A reduced hiberfile only supports hiberboot" (hiberboot is Fast Startup's
+      mechanism).
+    - To switch to reduced, Windows must manage the file's size: `powercfg /hibernate /size 0`
+      first, then `/type reduced`.
+    - The page states no administrator requirement for `/hibernate`; the helper runs it
+      elevated anyway.
+    - **Undo:** `powercfg /hibernate /type full` or `powercfg /hibernate on`. Both follow from the
+      syntax; neither is shown as an example.
+    - The page gives no size for "reduced". The plan's earlier "about 20% of RAM" is dropped
+      as unverified; the window measures the file before and after.
+    - **On the owner's PC** (`powercfg /a`): Hibernate and Hybrid Sleep are available, and
+      **Fast Startup is "disabled in the current system policy"**. A reduced file would serve
+      nothing here. Decision 4 was asked again: hibernation off.
+    - [powercfg command-line options](https://learn.microsoft.com/en-us/windows-hardware/design/device-experiences/powercfg-command-line-options)
+
+  **Restore point (decision 5)**
+
+  - **The call:** `SRSetRestorePointW`, loaded at run time from `SrClient.dll` (Microsoft:
+    don't link it at load time).
+    - It takes `BEGIN_SYSTEM_CHANGE` + `MODIFY_SETTINGS`, then `END_SYSTEM_CHANGE` with the
+      returned sequence number.
+    - COM security must let NetworkService, LocalService and System call back
+      (`CoInitializeSecurity`). The "Using System Restore" page with the details is still to
+      read in task 2.
+  - **Results:**
+    - it fails with `ERROR_SERVICE_DISABLED` when System Restore is off;
+    - it fails with `ERROR_DISK_FULL` when System Restore is in standby for low disk space;
+    - it can't be called in safe mode.
+  - **The 24-hour limit:** "Windows skips creating this new restore point if any restore points
+    have been created in the last 24 hours". It then returns success with the earlier point's
+    sequence number.
+    - So the helper reads the newest restore point's sequence number before calling. The same
+      number back means "a recent restore point is reused", and the window says so with that
+      point's date.
+    - The window is the `SystemRestorePointCreationFrequency` value (minutes) under
+      `HKLM\Software\Microsoft\Windows NT\CurrentVersion\SystemRestore`. ByteBroom never
+      changes it.
+  - **Administrator rights:** not stated for the call itself; listing restore points
+    (`Get-ComputerRestorePoint`) "Run as administrator". It runs in the helper.
+  - **Not used:** `Checkpoint-Computer`, which reports the 24-hour skip as an error and needs a
+    PowerShell process.
+  - [SRSetRestorePointW](https://learn.microsoft.com/en-us/windows/win32/api/srrestoreptapi/nf-srrestoreptapi-srsetrestorepointw),
+    [STATEMGRSTATUS](https://learn.microsoft.com/en-us/windows/win32/api/srrestoreptapi/ns-srrestoreptapi-statemgrstatus),
+    [Checkpoint-Computer](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.management/checkpoint-computer?view=powershell-5.1),
+    [Get-ComputerRestorePoint](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.management/get-computerrestorepoint?view=powershell-5.1)
+
+  **Information only, with Windows' own page**
+
+  - **Component store (WinSxS):**
+    - Microsoft says never delete the folder by hand. The supported tools are the
+      `StartComponentCleanup` task, `Dism.exe /online /Cleanup-Image /StartComponentCleanup`
+      (elevated), and Disk Cleanup.
+    - `/ResetBase` means "existing update packages can't be uninstalled", so ByteBroom never
+      suggests it.
+    - The window shows the size and names the Storage settings page.
+    - [Clean up the WinSxS folder](https://learn.microsoft.com/en-us/windows-hardware/manufacture/desktop/clean-up-the-winsxs-folder)
+  - **Windows.old and the Update store:**
+    - Settings › System › Storage › Temporary files › "Previous version of Windows" (needs
+      administrator rights). Windows deletes it itself 10 days after an upgrade.
+    - Removing it can't be undone and ends going back to the previous Windows.
+    - Button: `ms-settings:storagesense`.
+    - [Delete your previous version of Windows](https://support.microsoft.com/en-us/windows/delete-your-previous-version-of-windows-f8b26680-e083-c710-b757-7567d69dbb74)
+  - **Old restore points:**
+    - Settings has no page for System Protection (no `ms-settings:` URI is listed for it).
+    - The window shows the size and says how to reach it: System Properties › System Protection.
+    - No button in V1.
+  - **Page file:**
+    - Microsoft doesn't advise removing it: it backs the commit limit and crash dumps.
+    - Shown as information only, with no button. The Learn page doesn't name the
+      Virtual-memory dialog, so ByteBroom doesn't either.
+    - [Introduction to the page file](https://learn.microsoft.com/en-us/troubleshoot/windows-client/performance/introduction-to-the-page-file)
+  - **Settings pages used:** `ms-settings:storagesense` (Storage), `ms-settings:powersleep`
+    (Power & sleep).
+    - [Launch the Settings app](https://learn.microsoft.com/en-us/windows/apps/develop/launch/launch-settings-app)
+
+  **Design consequence:** emptying the Recycle Bin needs no administrator rights, and a
+  restore point can't bring those files back. So it needs no helper, no UAC prompt and no
+  restore point (decision 8, owner: yes).
 - [ ] **1. The helper skeleton and the elevation path (no actions yet)**
   - Acceptance:
     - `bytebroom-admin.exe` accepts only the fixed action names; anything else exits with an
