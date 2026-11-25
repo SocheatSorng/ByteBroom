@@ -353,9 +353,16 @@ Built 2026-11-26, version 1.0.0. `./check.ps1` and `./build.ps1` pass.
   - with no release published, there was no update banner, and the log says
     `update check: failed (offline or no release)`;
   - uninstalling removed the folder and Windows' uninstall record, and kept `%LOCALAPPDATA%\ByteBroom`.
+  - the small clean, with the installed app (06:30): Windows' dialog answered **Clean them**,
+    logged `amber-confirm items=1 ... answer=Confirm ... Clean`, and the item went to the Recycle
+    Bin (one of the owner's own files rather than the test file; it can be restored from there).
+  - the Esc check, closed on the owner's word: pressing Esc after **Clean now** closed the dialog
+    and nothing was deleted (the Recycle Bin was unchanged). No `answer=Cancel` line was logged
+    for it, and every answer to Windows' dialog is logged, so the Esc most likely closed the
+    page's Preview dialog, where Esc means Back. Windows' dialog's own Cancel path is shown by the
+    real log line of 2026-11-25 18:06 (`answer=Cancel ... Cancelled`), from code unchanged since
+    except comments, and by `only_clean_them_lets_an_amber_move_or_recycle_through`.
 - **Open:**
-  - task 9 part A, the small clean: the log has no `amber-confirm` line from the installed app yet.
-    The owner will repeat it with the task 0 check (steps 2 to 7), on a fresh install;
   - task 8 (push, green workflows);
   - task 9 part B (install from a published release, update to a newer one).
 - **Additions to task 9:**
