@@ -15,6 +15,7 @@ pub mod policy;
 pub mod preview;
 pub mod recycle;
 pub mod red;
+pub mod red_actions;
 pub mod relocate;
 pub mod restore;
 pub mod rules;

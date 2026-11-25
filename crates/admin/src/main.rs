@@ -16,11 +16,11 @@
 
 #![forbid(unsafe_code)]
 
-use bytebroom_core::admin::{AdminAction, Exit, parse_args};
-use bytebroom_core::restore::{RestorePoint, guarded};
+use bytebroom_core::admin::{AdminAction, Exit, Plan, exit_for_program, parse_args, plan};
+use bytebroom_core::restore::{PointInPlace, RestorePoint, guarded};
 use bytebroom_core::win::admin::{
     enter_system32, is_elevated, load_dlls_from_system32_only, location_problem, own_exe,
-    reset_environment,
+    reset_environment, run_plan, system32,
 };
 use bytebroom_core::win::restore::make_restore_point;
 use std::process::ExitCode;
@@ -41,15 +41,27 @@ fn gate(
     Ok(action)
 }
 
-/// Carry out one action. `make_point` makes the restore point (the real one in `main`; tests
-/// pass a stand-in, so they never make a real restore point).
-fn run(action: AdminAction, make_point: impl FnOnce(&str) -> RestorePoint) -> Exit {
+/// Carry out one action. `make_point` makes the restore point and `run_program` runs a plan
+/// (the real ones in `main`; tests pass recorders, so they never make a restore point or run
+/// a program). `system32` comes from the Windows API.
+fn run(
+    action: AdminAction,
+    system32: &str,
+    make_point: impl FnOnce(&str) -> RestorePoint,
+    run_program: impl FnOnce(&Plan, &PointInPlace) -> Option<u32>,
+) -> Exit {
     let description = action.restore_description();
     match action {
         AdminAction::Noop => Exit::Done,
-        // The restore point on its own; later actions use `guarded` the same way, with their
-        // change as the second step.
         AdminAction::RestorePoint => guarded(|| make_point(description), |_point| Exit::Done),
+        // The change runs only with the restore point's proof in hand.
+        AdminAction::HibernationOff | AdminAction::DeliveryOptimizationCache => guarded(
+            || make_point(description),
+            |point| match plan(action, system32) {
+                Some(plan) => exit_for_program(run_program(&plan, &point)),
+                None => Exit::Failed,
+            },
+        ),
     }
 }
 
@@ -63,7 +75,10 @@ fn main() -> ExitCode {
     let location_ok =
         action.is_some() && own_exe().is_some_and(|exe| location_problem(&exe).is_none());
     let exit = match gate(action, location_ok, action.is_some() && is_elevated()) {
-        Ok(action) => run(action, make_restore_point),
+        Ok(action) => match system32() {
+            Some(s32) => run(action, &s32.to_string(), make_restore_point, run_plan),
+            None => Exit::Failed,
+        },
         Err(stop) => stop,
     };
     ExitCode::from(exit.code())
@@ -72,6 +87,66 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
+
+    const S32: &str = r"C:\Windows\System32";
+
+    /// A runner for tests where no program may run at all.
+    fn never_runs(plan: &Plan, _: &PointInPlace) -> Option<u32> {
+        panic!("no program may run here: {plan:?}")
+    }
+
+    /// The two system-changing actions: each runs its plan exactly once, only after the
+    /// restore point, and answers from the program's exit code.
+    #[test]
+    fn red_actions_run_their_plan_once_after_the_restore_point() {
+        for action in [
+            AdminAction::HibernationOff,
+            AdminAction::DeliveryOptimizationCache,
+        ] {
+            for (code, expected) in [
+                (Some(0), Exit::Done),
+                (Some(1), Exit::Failed),
+                (None, Exit::Failed),
+            ] {
+                let log = RefCell::new(Vec::<String>::new());
+                let exit = run(
+                    action,
+                    S32,
+                    |d| {
+                        log.borrow_mut().push(format!("point: {d}"));
+                        RestorePoint::InPlace(7)
+                    },
+                    |p, proof| {
+                        assert_eq!(proof.sequence(), 7);
+                        assert_eq!(Some(p), plan(action, S32).as_ref());
+                        log.borrow_mut().push("program".into());
+                        code
+                    },
+                );
+                assert_eq!(exit, expected, "{action:?} {code:?}");
+                assert_eq!(
+                    *log.borrow(),
+                    [
+                        format!("point: {}", action.restore_description()),
+                        "program".to_string()
+                    ]
+                );
+            }
+        }
+    }
+
+    /// No program runs when the restore point fails.
+    #[test]
+    fn no_program_runs_without_a_restore_point() {
+        for action in [
+            AdminAction::HibernationOff,
+            AdminAction::DeliveryOptimizationCache,
+        ] {
+            let exit = run(action, S32, |_| RestorePoint::Off, never_runs);
+            assert_eq!(exit, Exit::RestoreOff);
+        }
+    }
 
     #[test]
     fn nothing_runs_unless_every_check_passes_in_order() {
@@ -87,10 +162,15 @@ mod tests {
     #[test]
     fn the_noop_does_nothing_and_succeeds() {
         let asked = std::cell::Cell::new(false);
-        let exit = run(AdminAction::Noop, |_| {
-            asked.set(true);
-            RestorePoint::InPlace(1)
-        });
+        let exit = run(
+            AdminAction::Noop,
+            S32,
+            |_| {
+                asked.set(true);
+                RestorePoint::InPlace(1)
+            },
+            never_runs,
+        );
         assert_eq!(exit, Exit::Done);
         assert!(!asked.get(), "the no-op makes no restore point");
     }
@@ -109,10 +189,15 @@ mod tests {
                 (RestorePoint::Failed(5), Exit::RestoreFailed),
             ] {
                 let asked = std::cell::Cell::new(false);
-                let exit = run(action, |_| {
-                    asked.set(true);
-                    point
-                });
+                let exit = run(
+                    action,
+                    S32,
+                    |_| {
+                        asked.set(true);
+                        point
+                    },
+                    never_runs,
+                );
                 assert!(asked.get(), "{action:?} must ask for a restore point");
                 assert_eq!(exit, expected, "{action:?} with {point:?}");
             }
@@ -123,10 +208,15 @@ mod tests {
     fn the_restore_point_action_answers_what_windows_said() {
         let with = |point: RestorePoint| {
             let named = std::cell::RefCell::new(String::new());
-            let exit = run(AdminAction::RestorePoint, |d| {
-                *named.borrow_mut() = d.to_string();
-                point
-            });
+            let exit = run(
+                AdminAction::RestorePoint,
+                S32,
+                |d| {
+                    *named.borrow_mut() = d.to_string();
+                    point
+                },
+                never_runs,
+            );
             assert!(
                 named.borrow().starts_with("ByteBroom"),
                 "{}",

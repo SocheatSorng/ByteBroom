@@ -23,17 +23,28 @@ pub enum AdminAction {
     /// Makes a restore point (or confirms one from the last 24 hours) and nothing else. Every
     /// system-changing action also makes its own, in the same run (`restore::guarded`).
     RestorePoint,
+    /// Turns hibernation off (`powercfg /hibernate off`; owner's decision 4).
+    HibernationOff,
+    /// Clears the Delivery Optimization cache (`Delete-DeliveryOptimizationCache -Force`).
+    DeliveryOptimizationCache,
 }
 
 impl AdminAction {
     /// Every action, in a fixed order.
-    pub const ALL: [AdminAction; 2] = [AdminAction::Noop, AdminAction::RestorePoint];
+    pub const ALL: [AdminAction; 4] = [
+        AdminAction::Noop,
+        AdminAction::RestorePoint,
+        AdminAction::HibernationOff,
+        AdminAction::DeliveryOptimizationCache,
+    ];
 
     /// The command-line word for this action (fixed text, never built from input).
     pub fn arg(self) -> &'static str {
         match self {
             Self::Noop => "noop",
             Self::RestorePoint => "restore-point",
+            Self::HibernationOff => "hibernation-off",
+            Self::DeliveryOptimizationCache => "delivery-optimization-cache",
         }
     }
 
@@ -42,9 +53,102 @@ impl AdminAction {
         match self {
             Self::Noop => "ByteBroom",
             Self::RestorePoint => "ByteBroom: restore point on request",
+            Self::HibernationOff => "ByteBroom: before turning hibernation off",
+            Self::DeliveryOptimizationCache => {
+                "ByteBroom: before clearing the Delivery Optimization cache"
+            }
         }
     }
 }
+
+/// A Windows program the helper may run: always by full path under System32, never found by
+/// a search the user could steer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Program {
+    /// `powercfg.exe`.
+    Powercfg,
+    /// Windows PowerShell 5.1.
+    WindowsPowerShell,
+}
+
+impl Program {
+    /// Its path below System32.
+    pub fn below_system32(self) -> &'static str {
+        match self {
+            Self::Powercfg => "powercfg.exe",
+            Self::WindowsPowerShell => r"WindowsPowerShell\v1.0\powershell.exe",
+        }
+    }
+}
+
+/// What the helper runs for an action: a program and fixed arguments, plus environment
+/// variables added to [`fixed_environment`] for that program only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Plan {
+    /// The program.
+    pub program: Program,
+    /// Its arguments, fixed text (System32's path is the only part filled in, from the API).
+    pub args: Vec<String>,
+    /// Extra environment for the child.
+    pub extra_env: Vec<(&'static str, String)>,
+}
+
+/// The plan for an action, with `system32` from the Windows API. `None` for actions that run
+/// no program, or if `system32` could break the command's quoting. Pure.
+pub fn plan(action: AdminAction, system32: &str) -> Option<Plan> {
+    match action {
+        AdminAction::Noop | AdminAction::RestorePoint => None,
+        AdminAction::HibernationOff => Some(Plan {
+            program: Program::Powercfg,
+            args: vec!["/hibernate".into(), "off".into()],
+            extra_env: Vec::new(),
+        }),
+        AdminAction::DeliveryOptimizationCache => {
+            if system32.contains(['\'', '"', '`', '$', ';']) {
+                return None;
+            }
+            let modules = format!(r"{system32}\WindowsPowerShell\v1.0\Modules");
+            // The module by its full System32 path and the cmdlet by its module-qualified
+            // name: nothing is looked up in a folder the user can write (Documents), and the
+            // user's execution policy (HKCU) and module cache are not used.
+            let command = format!(
+                r"Import-Module -Name '{modules}\DeliveryOptimization\DeliveryOptimization.psd1' -ErrorAction Stop; DeliveryOptimization\Delete-DeliveryOptimizationCache -Force -ErrorAction Stop"
+            );
+            Some(Plan {
+                program: Program::WindowsPowerShell,
+                args: [
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-NoLogo",
+                    "-ExecutionPolicy",
+                    "RemoteSigned",
+                    "-Command",
+                ]
+                .into_iter()
+                .map(String::from)
+                .chain([command])
+                .collect(),
+                extra_env: vec![
+                    ("PSModulePath", modules),
+                    // Microsoft: an invalid path turns the module analysis cache off.
+                    ("PSModuleAnalysisCachePath", "NUL".into()),
+                ],
+            })
+        }
+    }
+}
+
+/// The helper's answer for a program's exit code (`None`: it couldn't start, or ran too long
+/// and was stopped). Pure.
+pub fn exit_for_program(code: Option<u32>) -> Exit {
+    match code {
+        Some(0) => Exit::Done,
+        _ => Exit::Failed,
+    }
+}
+
+/// How long the helper lets an action's program run before stopping it.
+pub const PROGRAM_WAIT: std::time::Duration = std::time::Duration::from_secs(180);
 
 /// Parse the helper's arguments (without the program name): exactly one exact action word.
 pub fn parse_args(args: &[OsString]) -> Option<AdminAction> {
@@ -389,6 +493,68 @@ mod tests {
             });
         }
         assert_eq!(problem(&sec, Place::Own), None);
+    }
+
+    #[test]
+    fn each_action_runs_exactly_its_fixed_program() {
+        const S32: &str = r"C:\Windows\System32";
+        assert_eq!(plan(AdminAction::Noop, S32), None);
+        assert_eq!(plan(AdminAction::RestorePoint, S32), None);
+        assert_eq!(
+            plan(AdminAction::HibernationOff, S32),
+            Some(Plan {
+                program: Program::Powercfg,
+                args: vec!["/hibernate".into(), "off".into()],
+                extra_env: vec![],
+            })
+        );
+        let cache = plan(AdminAction::DeliveryOptimizationCache, S32).unwrap();
+        assert_eq!(cache.program, Program::WindowsPowerShell);
+        assert_eq!(
+            cache.args,
+            [
+                "-NoProfile",
+                "-NonInteractive",
+                "-NoLogo",
+                "-ExecutionPolicy",
+                "RemoteSigned",
+                "-Command",
+                r"Import-Module -Name 'C:\Windows\System32\WindowsPowerShell\v1.0\Modules\DeliveryOptimization\DeliveryOptimization.psd1' -ErrorAction Stop; DeliveryOptimization\Delete-DeliveryOptimizationCache -Force -ErrorAction Stop",
+            ]
+        );
+        // Pinned files are kept: never -IncludePinnedFiles.
+        assert!(!cache.args.iter().any(|a| a.contains("IncludePinnedFiles")));
+        assert_eq!(
+            cache.extra_env,
+            [
+                (
+                    "PSModulePath",
+                    r"C:\Windows\System32\WindowsPowerShell\v1.0\Modules".to_string()
+                ),
+                ("PSModuleAnalysisCachePath", "NUL".to_string()),
+            ]
+        );
+        // A System32 path that could break the quoting gives no plan at all.
+        for bad in [r"C:\Win'dows\System32", r"C:\W$x\System32", r"C:\a;b"] {
+            assert_eq!(
+                plan(AdminAction::DeliveryOptimizationCache, bad),
+                None,
+                "{bad}"
+            );
+        }
+        // Only System32 programs, by fixed relative path.
+        for p in [Program::Powercfg, Program::WindowsPowerShell] {
+            assert!(!p.below_system32().contains(".."));
+            assert!(p.below_system32().ends_with(".exe"));
+        }
+    }
+
+    #[test]
+    fn only_a_zero_exit_counts_as_done() {
+        assert_eq!(exit_for_program(Some(0)), Exit::Done);
+        for code in [Some(1), Some(5), Some(u32::MAX), None] {
+            assert_eq!(exit_for_program(code), Exit::Failed, "{code:?}");
+        }
     }
 
     #[test]

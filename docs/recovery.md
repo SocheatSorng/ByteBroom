@@ -28,8 +28,8 @@ doesn't say something, this page says "not stated" rather than guess.
 | Action | Undo | Notes |
 | --- | --- | --- |
 | Restore point (`restore-point`) | Nothing to undo. | It only adds a restore point, named "ByteBroom: restore point on request". Windows deletes old points itself as their space fills. |
-| Hibernation off | In an **administrator** PowerShell: `powercfg /hibernate on` | Brings back Hibernate, Hybrid Sleep and `hiberfil.sys`. Check with `powercfg /a`. Fast Startup stays as your policy sets it (disabled on the owner's PC). |
-| Delivery Optimization cache | Can't be undone. | Microsoft: "Deletion can't be undone". Nothing is lost for good: Windows downloads again what it needs. |
+| Hibernation off (`hibernation-off`) | In an **administrator** PowerShell: `powercfg /hibernate on` | Brings back Hibernate, Hybrid Sleep and `hiberfil.sys`. Check with `powercfg /a`. Fast Startup stays as your policy sets it (disabled on the owner's PC). |
+| Delivery Optimization cache (`delivery-optimization-cache`) | Can't be undone. | Microsoft: "Deletion can't be undone". Nothing is lost for good: Windows downloads again what it needs. |
 | Empty the Recycle Bin | Can't be undone. | The files are gone. A restore point doesn't bring personal files back. |
 | The helper itself | In an **administrator** PowerShell, in your project folder: `./tools/uninstall-helper.ps1` | Removes `Program Files\ByteBroom`. |
 

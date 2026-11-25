@@ -293,6 +293,45 @@ pub fn system32() -> Option<WinPath> {
     WinPath::parse(&String::from_utf16(&buf[..len]).ok()?).ok()
 }
 
+/// Run an action's program, as the elevated helper does: by full path under System32, with
+/// only [`crate::admin::fixed_environment`] plus the plan's extras (review N2), System32 as its
+/// folder, no window and no input, stopped after [`crate::admin::PROGRAM_WAIT`]. Its exit code,
+/// or `None` if it couldn't start or ran too long. It takes the restore point's proof, so it
+/// can't be called before one is in place. Never call this from a test.
+pub fn run_plan(plan: &crate::admin::Plan, _point: &crate::restore::PointInPlace) -> Option<u32> {
+    use std::os::windows::process::CommandExt;
+    use std::process::{Command, Stdio};
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let (windows, system32) = (windows_dir()?.to_string(), system32()?.to_string());
+    let program = format!(r"{system32}\{}", plan.program.below_system32());
+    let mut child = Command::new(&program)
+        .args(&plan.args)
+        .env_clear()
+        .envs(crate::admin::fixed_environment(&windows, &system32))
+        .envs(plan.extra_env.iter().map(|(k, v)| (*k, v.as_str())))
+        .current_dir(&system32)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn()
+        .ok()?;
+    let start = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return status.code().map(|c| c as u32),
+            Ok(None) if start.elapsed() < crate::admin::PROGRAM_WAIT => {
+                std::thread::sleep(std::time::Duration::from_millis(250));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
+}
+
 /// Windows' own folder, from the API (`GetSystemWindowsDirectoryW`), not the environment.
 pub fn windows_dir() -> Option<WinPath> {
     let mut buf = vec![0u16; 512];

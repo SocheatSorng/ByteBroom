@@ -279,8 +279,8 @@ fn the_recovery_recipe_matches_the_helper_and_the_plan() {
     assert!(recipe.contains(r"`Program Files\ByteBroom`"));
     // Every red action the owner chose has a row (decision 3).
     for row in [
-        "| Hibernation off |",
-        "| Delivery Optimization cache |",
+        "| Hibernation off (`hibernation-off`) |",
+        "| Delivery Optimization cache (`delivery-optimization-cache`) |",
         "| Empty the Recycle Bin |",
     ] {
         assert!(recipe.contains(row), "docs/recovery.md lacks {row}");

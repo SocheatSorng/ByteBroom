@@ -49,7 +49,7 @@ pub const ONE_ASK_AT_MOST: Duration = Duration::from_secs(120 + 5);
 pub const ROW_WAIT_MS: i32 = 5_000;
 /// How long the unelevated app waits for the helper: longer than the helper's worst case, so
 /// a stuck WMI can never hang the window (security review of the fix, should-fix 1).
-pub const APP_WAIT: Duration = Duration::from_secs(600);
+pub const APP_WAIT: Duration = Duration::from_secs(900);
 /// ByteBroom's own code in [`RestorePoint::Failed`]: Windows said the point was made, but it
 /// never appeared in the list of restore points.
 pub const NOT_LISTED: u32 = 0xB0B0_0001;
@@ -259,7 +259,12 @@ mod tests {
     fn the_window_outlasts_the_helpers_worst_case() {
         // Time is checked just before it runs out, then a pause and one more ask that takes
         // as long as it may; plus System Restore's own calls, allowed 4 minutes.
-        let worst = CONFIRM_FOR + CONFIRM_PAUSE + ONE_ASK_AT_MOST + Duration::from_secs(240);
+        // Then the action's program, stopped after its own limit.
+        let worst = CONFIRM_FOR
+            + CONFIRM_PAUSE
+            + ONE_ASK_AT_MOST
+            + Duration::from_secs(240)
+            + crate::admin::PROGRAM_WAIT;
         assert!(APP_WAIT > worst, "{APP_WAIT:?} vs {worst:?}");
     }
 
