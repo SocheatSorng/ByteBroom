@@ -15,9 +15,11 @@
 #![forbid(unsafe_code)]
 
 use bytebroom_core::admin::{AdminAction, Exit, parse_args};
+use bytebroom_core::restore::{RestorePoint, guarded};
 use bytebroom_core::win::admin::{
     enter_system32, is_elevated, load_dlls_from_system32_only, location_problem, own_exe,
 };
+use bytebroom_core::win::restore::make_restore_point;
 use std::process::ExitCode;
 
 /// Decide whether to act, from the facts in check order. Pure.
@@ -36,10 +38,15 @@ fn gate(
     Ok(action)
 }
 
-/// Carry out one action.
-fn run(action: AdminAction) -> Exit {
+/// Carry out one action. `make_point` makes the restore point (the real one in `main`; tests
+/// pass a stand-in, so they never make a real restore point).
+fn run(action: AdminAction, make_point: impl FnOnce(&str) -> RestorePoint) -> Exit {
+    let description = action.restore_description();
     match action {
         AdminAction::Noop => Exit::Done,
+        // The restore point on its own; later actions use `guarded` the same way, with their
+        // change as the second step.
+        AdminAction::RestorePoint => guarded(|| make_point(description), || Exit::Done),
     }
 }
 
@@ -53,7 +60,7 @@ fn main() -> ExitCode {
     let location_ok =
         action.is_some() && own_exe().is_some_and(|exe| location_problem(&exe).is_none());
     let exit = match gate(action, location_ok, action.is_some() && is_elevated()) {
-        Ok(action) => run(action),
+        Ok(action) => run(action, make_restore_point),
         Err(stop) => stop,
     };
     ExitCode::from(exit.code())
@@ -76,6 +83,34 @@ mod tests {
 
     #[test]
     fn the_noop_does_nothing_and_succeeds() {
-        assert_eq!(run(AdminAction::Noop), Exit::Done);
+        let asked = std::cell::Cell::new(false);
+        let exit = run(AdminAction::Noop, |_| {
+            asked.set(true);
+            RestorePoint::InPlace(1)
+        });
+        assert_eq!(exit, Exit::Done);
+        assert!(!asked.get(), "the no-op makes no restore point");
+    }
+
+    #[test]
+    fn the_restore_point_action_answers_what_windows_said() {
+        let with = |point: RestorePoint| {
+            let named = std::cell::RefCell::new(String::new());
+            let exit = run(AdminAction::RestorePoint, |d| {
+                *named.borrow_mut() = d.to_string();
+                point
+            });
+            assert!(
+                named.borrow().starts_with("ByteBroom"),
+                "{}",
+                named.borrow()
+            );
+            exit
+        };
+        assert_eq!(with(RestorePoint::InPlace(88)), Exit::Done);
+        assert_eq!(with(RestorePoint::Off), Exit::RestoreOff);
+        assert_eq!(with(RestorePoint::LowDisk), Exit::RestoreLowDisk);
+        assert_eq!(with(RestorePoint::Unavailable), Exit::RestoreFailed);
+        assert_eq!(with(RestorePoint::Failed(5)), Exit::RestoreFailed);
     }
 }

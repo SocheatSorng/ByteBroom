@@ -20,16 +20,28 @@ use std::ffi::OsString;
 pub enum AdminAction {
     /// Does nothing, successfully: proves the UAC round trip and the location check.
     Noop,
+    /// Makes a restore point (or confirms one from the last 24 hours) and nothing else. Every
+    /// system-changing action also makes its own, in the same run (`restore::guarded`).
+    RestorePoint,
 }
 
 impl AdminAction {
     /// Every action, in a fixed order.
-    pub const ALL: [AdminAction; 1] = [AdminAction::Noop];
+    pub const ALL: [AdminAction; 2] = [AdminAction::Noop, AdminAction::RestorePoint];
 
     /// The command-line word for this action (fixed text, never built from input).
     pub fn arg(self) -> &'static str {
         match self {
             Self::Noop => "noop",
+            Self::RestorePoint => "restore-point",
+        }
+    }
+
+    /// The restore point's description, as Windows lists it (fixed text).
+    pub fn restore_description(self) -> &'static str {
+        match self {
+            Self::Noop => "ByteBroom",
+            Self::RestorePoint => "ByteBroom: restore point on request",
         }
     }
 }
@@ -54,9 +66,27 @@ pub enum Exit {
     NotElevated,
     /// The action was tried and failed.
     Failed,
+    /// No restore point: System Restore is turned off. Nothing was changed.
+    RestoreOff,
+    /// No restore point: System Restore is paused for low disk space. Nothing was changed.
+    RestoreLowDisk,
+    /// No restore point could be made. Nothing was changed.
+    RestoreFailed,
 }
 
 impl Exit {
+    /// Every answer, for tests and the window's texts.
+    pub const ALL: [Exit; 8] = [
+        Exit::Done,
+        Exit::BadArgs,
+        Exit::UntrustedLocation,
+        Exit::NotElevated,
+        Exit::Failed,
+        Exit::RestoreOff,
+        Exit::RestoreLowDisk,
+        Exit::RestoreFailed,
+    ];
+
     /// The process exit code.
     pub fn code(self) -> u8 {
         match self {
@@ -65,6 +95,9 @@ impl Exit {
             Self::UntrustedLocation => 3,
             Self::NotElevated => 4,
             Self::Failed => 5,
+            Self::RestoreOff => 6,
+            Self::RestoreLowDisk => 7,
+            Self::RestoreFailed => 8,
         }
     }
 
@@ -75,6 +108,9 @@ impl Exit {
             2 => Self::BadArgs,
             3 => Self::UntrustedLocation,
             4 => Self::NotElevated,
+            6 => Self::RestoreOff,
+            7 => Self::RestoreLowDisk,
+            8 => Self::RestoreFailed,
             _ => Self::Failed,
         }
     }
@@ -89,6 +125,13 @@ impl Exit {
             }
             Self::NotElevated => "the helper was not given administrator rights; nothing was done",
             Self::Failed => "the helper could not do it",
+            Self::RestoreOff => {
+                "System Restore is turned off, so no restore point could be made; nothing was changed"
+            }
+            Self::RestoreLowDisk => {
+                "System Restore is paused because the disk is low on space; nothing was changed"
+            }
+            Self::RestoreFailed => "Windows could not make a restore point; nothing was changed",
         }
     }
 }
@@ -244,16 +287,13 @@ mod tests {
 
     #[test]
     fn exit_codes_round_trip_and_anything_else_is_a_failure() {
-        for e in [
-            Exit::Done,
-            Exit::BadArgs,
-            Exit::UntrustedLocation,
-            Exit::NotElevated,
-            Exit::Failed,
-        ] {
+        let mut codes = std::collections::BTreeSet::new();
+        for e in Exit::ALL {
             assert_eq!(Exit::from_code(u32::from(e.code())), e);
+            assert!(codes.insert(e.code()), "{e:?} shares its code");
+            assert!(!e.describe().is_empty());
         }
-        for other in [1, 6, 101, 0xC000_0005, u32::MAX] {
+        for other in [1, 9, 101, 0xC000_0005, u32::MAX] {
             assert_eq!(Exit::from_code(other), Exit::Failed, "{other}");
         }
     }

@@ -121,3 +121,19 @@ fn the_install_scripts_rule_agrees_with_the_helpers() {
     assert!(out.starts_with("PROBLEM:"), "{out}");
     assert!(location_problem(&real(&exe)).is_some());
 }
+
+/// Task 2, read-only: the parts of the restore point call that can be checked without making
+/// one. COM's security descriptor builds with exactly Microsoft's five callers, and System32's
+/// SrClient.dll exports SRSetRestorePointW. The call itself is never made by a test: it would
+/// make a real restore point.
+#[test]
+fn the_restore_point_call_is_ready_without_being_made() {
+    use bytebroom_core::win::restore::{CALLERS, ComSecurity, SrClient};
+    let sec = ComSecurity::build().expect("the COM security descriptor builds");
+    assert_eq!(sec.callers(), CALLERS.len());
+    assert_eq!(CALLERS.len(), 5);
+    assert!(
+        SrClient::load().is_some(),
+        "System Restore's SrClient.dll with SRSetRestorePointW, from System32"
+    );
+}

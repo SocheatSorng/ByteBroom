@@ -16,6 +16,7 @@ pub mod preview;
 pub mod recycle;
 pub mod red;
 pub mod relocate;
+pub mod restore;
 pub mod rules;
 pub mod scan;
 pub mod summary;

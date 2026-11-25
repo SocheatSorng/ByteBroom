@@ -311,12 +311,39 @@ Each task: code → tests → fmt + clippy → full tests → build → commit w
     - argument parsing (table);
     - the folder-ownership check on temp folders with chosen ACLs;
     - the app never builds a helper command line from page data (boundary test).
-- [ ] **2. Restore point**
+- [x] **2. Restore point** (built 2026-11-25; the owner's real check is below)
   - Acceptance:
     - the helper makes a restore point (System Restore must be on for the Windows drive), or
       reports that one was made in the last 24 hours, or that System Restore is off;
     - no red action runs without one of those answers.
   - Tests: the plan and the result parsing; the real call only in the owner's check.
+  - **Built:**
+    - `core::restore`: what each result means;
+    - `guarded`: no action runs unless a restore point is in place, and the restore point comes
+      first. It is the only way later actions may run (review N1);
+    - `core::win::restore`: Microsoft's "Using System Restore" sample, with
+      - explicit COM security (Administrators, SYSTEM, LocalService, NetworkService and
+        Principal Self only; packet privacy; identify-level impersonation;
+        `EOAC_DISABLE_AAA | EOAC_NO_CUSTOM_MARSHAL`);
+      - `SrClient.dll` loaded from System32 at run time;
+      - `BEGIN_SYSTEM_CHANGE` + `MODIFY_SETTINGS`, then `END_SYSTEM_CHANGE`;
+    - the `restore-point` action, with exit codes 6 (System Restore off), 7 (paused for low
+      disk) and 8 (failed).
+  - **Changed from task 0:** the helper doesn't tell "made now" from "reused from the last 24
+    hours".
+    - Telling them apart needs either an elevated PowerShell listing of restore points (more
+      elevated surface, review N2) or Windows' undocumented `LastIndex` value, and it would
+      only change a message.
+    - Both mean a restore point from the last day is in place, so the window says that.
+  - **Tests** (none makes a real restore point):
+    - every documented result, and the guard (nothing runs without a point; the point comes
+      first);
+    - the action's answers, through a stand-in;
+    - COM's security descriptor builds with the five callers, and System32's `SrClient.dll`
+      exports `SRSetRestorePointW`;
+    - from the build folder, the helper refuses `restore-point` too.
+  - **On the owner's PC** (read-only): System Restore is on (`RPSessionInterval = 1`), with no
+    policy turning it off.
 - [ ] **3. Recovery recipe** in `docs/recovery.md`:
   - how to undo each action (for example `powercfg /hibernate on`);
   - how to roll back with System Restore, including from Windows' recovery screen;
@@ -408,6 +435,26 @@ To remove the helper: run `./tools/uninstall-helper.ps1` in an administrator Pow
 - **Lesson:** a first try ran the harness from the administrator console used for the install.
   An already-elevated program starts the helper with no prompt, so both runs said `Done`. Every
   later owner step names which console to use.
+
+## Owner check for task 2 (a real restore point)
+
+The helper changed, so it is installed again. In your project folder:
+
+1. **Ordinary** PowerShell: `./build.ps1`.
+2. **Administrator** PowerShell: `./tools/install-helper.ps1`. Expected: "Installed: … Only
+   administrators can change it." Then close this window.
+3. **Ordinary** PowerShell:
+   `cargo run --release -p bytebroom-admin --example elevate_restore_point`.
+   - On the UAC prompt, **Show more details** must read
+     `"C:\Program Files\ByteBroom\bytebroom-admin.exe" restore-point`.
+   - Click **Yes**. Expected: `Answer: Done (done)`. It can take a minute.
+4. Look at the result, read-only: press Win+R, type `rstrui`, press Enter, and choose
+   "Choose a different restore point" if asked.
+   - Either a new point named "ByteBroom: restore point on request" is at the top,
+   - or none is new because one already existed from the last 24 hours (Windows allows one a
+     day). Then the newest point listed should be from within the last day.
+   - Close the window with **Cancel**; don't restore anything.
+5. Tell Claude what step 3 printed, and what rstrui showed at the top (name and date).
 
 ## Risks
 

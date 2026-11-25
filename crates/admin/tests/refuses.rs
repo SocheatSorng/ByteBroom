@@ -32,5 +32,7 @@ fn bad_arguments_stop_it_before_anything_else() {
 fn from_the_build_folder_it_refuses_as_an_untrusted_location() {
     // target\ is the owner's own folder: whether or not this test runs elevated (CI runners
     // are), the helper must refuse before acting.
-    assert_eq!(helper(&["noop"]), 3);
+    for action in ["noop", "restore-point"] {
+        assert_eq!(helper(&[action]), 3, "{action}");
+    }
 }

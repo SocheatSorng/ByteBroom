@@ -17,6 +17,7 @@ mod layout;
 pub mod locations;
 pub mod recycle;
 pub mod red;
+pub mod restore;
 pub mod taskdialog;
 pub mod walk;
 
