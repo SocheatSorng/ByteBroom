@@ -373,8 +373,10 @@ Each task: code → tests → fmt + clippy → full tests → build → commit w
 - **First try:** the owner ran the main checkout's phase 3 build by mistake. It has the old
   dialog and writes no log, which is how the mix-up showed. Owner steps now name the exact
   program to start.
-- **Still to run:** step 6, the opt-in one-file Recycle Bin test, which proves the
-  `IFileOperation` path.
+- **Covered: step 6, the opt-in Recycle Bin test.** The real "Clean them" sent the file through
+  the new `IFileOperation` path, with its identity. The result screen showed no warning, so the
+  shell's reported bin item matched the checked file's ID on the owner's real Recycle Bin. The
+  one-file opt-in test stays available, and runs on CI.
 
 ## Owner check for task 1 (the UAC round trip)
 
