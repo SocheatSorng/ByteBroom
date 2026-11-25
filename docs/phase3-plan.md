@@ -140,7 +140,7 @@ Each task: code → tests → fmt + clippy → full tests → commit with a "why
     - a duplicate edited after the scan, refused.
 
     The real Recycle Bin stays CI-only, as in phase 1.
-- [ ] **5. The window**
+- [x] **5. The window**
   - Acceptance:
     - lists grouped by tier and category, with ticks and an action per item;
     - totals, a filter, and the largest items;
@@ -151,10 +151,15 @@ Each task: code → tests → fmt + clippy → full tests → commit with a "why
 - [ ] **6. UI designer agent and harness**
   - Acceptance:
     - `.claude/agents/bytebroom-ui-designer.md` and `tools/ui-harness/` render the real window with
-      fake data, behind a Cargo feature that only the harness enables;
+      fake data;
     - the agent screenshots it in light and dark mode, small and large sizes, fixes layout, spacing
       and colour, never changes behaviour and never commits;
-    - a test proves the release build lacks the fake-data feature.
+    - a test proves the app can't include the fake data.
+  - Changed while building (safer than the Cargo feature first planned): the harness is a small
+    Node server that serves the real `ui/` files with a fake `window.__TAURI__`
+    (`tools/ui-harness/mock-tauri.js`). The fake data never exists in Rust, so no build can switch
+    it on; the browser pane can emulate dark mode and window sizes. The boundary test checks that
+    the app has no Cargo features and that `ui/` never names the harness.
 - [ ] **7. Docs**
   - README: how to run and build the app, what each confirmation means, and the same-drive Recycle Bin
     warning. The docs-drift test covers the new commands.

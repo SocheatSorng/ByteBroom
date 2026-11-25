@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "ui-harness",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["tools/ui-harness/serve.mjs"],
+      "port": 1430
+    }
+  ]
+}
