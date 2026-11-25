@@ -32,7 +32,10 @@ use windows_sys::Win32::UI::Controls::{
 use windows_sys::Win32::UI::WindowsAndMessaging::IDCANCEL;
 
 /// The ID of the one custom (confirming) button.
-const ID_CONFIRM: i32 = 1000;
+pub const ID_CONFIRM: i32 = 1000;
+/// What `TaskDialogIndirect` reports when the owner presses Cancel, presses Esc, presses Alt+F4
+/// or clicks the close box (Microsoft's documentation of `pnButton`). It never confirms.
+pub const ID_CANCEL: i32 = IDCANCEL;
 
 /// What the owner did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -344,11 +344,19 @@ fn clean_asks_in_rust_before_acting_on_amber_items() {
         .nth(1)
         .and_then(|s| s.split("\n}\n").next())
         .expect("the clean command");
-    let ask = body.find("amber_question(&ready)").expect("clean asks");
+    // The gate itself (every verdict but Clean stops, for a move and a recycle alike) is tested
+    // in lib.rs, `only_clean_them_lets_an_amber_move_or_recycle_through`.
+    let ask = body
+        .find("amber_refusal(&asking")
+        .expect("clean asks through the gate");
     let shown = body.find("confirm::ask(").expect("in a native dialog");
     let stop = body
-        .find("if let Some(why) = confirm::refusal(verdict)")
+        .find("if let Some(why) = stop")
         .expect("anything but a clean verdict stops the clean");
+    assert!(
+        body.contains(".unwrap_or_else(|_| confirm::refusal(confirm::Verdict::Unavailable))"),
+        "a dialog thread that fails stops the clean"
+    );
     let act = body.find("carry_out(").expect("clean acts");
     assert!(
         ask < shown && shown < stop && stop < act,
