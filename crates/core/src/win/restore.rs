@@ -15,7 +15,9 @@
 //! Only the elevated helper calls [`make_restore_point`]; tests never do (it would make a real
 //! restore point). COM security can be set once per process, which suits the one-shot helper.
 
-use crate::restore::{CONFIRM_PAUSE, CONFIRM_TRIES, RestorePoint, confirm_listed, from_call};
+use crate::restore::{
+    CONFIRM_FOR, CONFIRM_PAUSE, ROW_WAIT_MS, RestorePoint, confirm_listed, from_call, row_matches,
+};
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use windows_sys::Win32::Foundation::FreeLibrary;
@@ -253,11 +255,12 @@ fn with_com(description: &str) -> RestorePoint {
         // Success from Windows isn't enough: the shadow copy behind the point is taken after
         // the call returns, and fails if this process has exited (owner's check, 2026-11-25:
         // VSS 8193 in DoSnapshotSet, no point left). Stay running until Windows lists it.
+        let start = std::time::Instant::now();
         return confirm_listed(
             sequence,
             is_listed,
+            || start.elapsed() >= CONFIRM_FOR,
             || std::thread::sleep(CONFIRM_PAUSE),
-            CONFIRM_TRIES,
         );
     }
     point
@@ -271,9 +274,10 @@ pub fn is_listed(sequence: i64) -> Option<bool> {
         RPC_C_AUTHN_LEVEL_PKT_PRIVACY, RPC_C_IMP_LEVEL_IMPERSONATE,
     };
     use windows::Win32::System::Rpc::{RPC_C_AUTHN_WINNT, RPC_C_AUTHZ_NONE};
+    use windows::Win32::System::Variant::VARIANT;
     use windows::Win32::System::Wmi::{
-        IWbemClassObject, IWbemLocator, WBEM_FLAG_FORWARD_ONLY, WBEM_FLAG_RETURN_IMMEDIATELY,
-        WBEM_INFINITE, WbemLocator,
+        IWbemClassObject, IWbemLocator, WBEM_FLAG_CONNECT_USE_MAX_WAIT, WBEM_FLAG_FORWARD_ONLY,
+        WBEM_FLAG_RETURN_IMMEDIATELY, WbemLocator,
     };
     use windows::core::{BSTR, PCWSTR};
 
@@ -287,7 +291,8 @@ pub fn is_listed(sequence: i64) -> Option<bool> {
                 &BSTR::new(),
                 &BSTR::new(),
                 &BSTR::new(),
-                0,
+                // At most 2 minutes, never forever (review of the fix, should-fix 1).
+                WBEM_FLAG_CONNECT_USE_MAX_WAIT.0,
                 &BSTR::new(),
                 None,
             )
@@ -318,10 +323,26 @@ pub fn is_listed(sequence: i64) -> Option<bool> {
             .ok()?;
         let mut row: [Option<IWbemClassObject>; 1] = [None];
         let mut returned = 0u32;
-        let hr = rows.Next(WBEM_INFINITE, &mut row, &mut returned);
+        // A time limit; a timeout is a success code with no row, so "not listed".
+        let hr = rows.Next(ROW_WAIT_MS, &mut row, &mut returned);
         if hr.is_err() {
             return None;
         }
-        Some(returned == 1 && row[0].is_some())
+        let Some(found) = row[0].as_ref().filter(|_| returned == 1) else {
+            return Some(false);
+        };
+        // Don't trust the filter alone: the row must carry the number asked for.
+        let mut value = VARIANT::default();
+        let number = found
+            .Get(
+                windows::core::w!("SequenceNumber"),
+                0,
+                &mut value,
+                None,
+                None,
+            )
+            .ok()
+            .and_then(|()| i64::try_from(&value).ok());
+        Some(row_matches(sequence, number))
     }
 }

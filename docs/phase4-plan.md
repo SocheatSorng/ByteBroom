@@ -377,6 +377,16 @@ Each task: code → tests → fmt + clippy → full tests → build → commit w
       - this also checks the 24-hour reuse: the reused number must be in the list too.
     - **New dependency:** the `windows` crate (=0.62.2, the version Tauri already brings in),
       for WMI's COM interfaces only.
+    - **Security review of the fix:** no must-fix; fixed with tests:
+      - **time limits:** the helper stops asking after 3 minutes (`CONFIRM_FOR`), each WMI
+        connect is capped at 2 minutes (`WBEM_FLAG_CONNECT_USE_MAX_WAIT`) and each row at 5
+        seconds, and the window waits for the helper at most 10 minutes (`APP_WAIT`, tested to
+        outlast the helper's worst case), then answers "didn't answer in time" and assumes
+        nothing was done;
+      - **the row's number:** a returned row counts only if its `SequenceNumber` is the one
+        asked for (`row_matches`), not just because the query's filter let it through.
+    - **Known gap:** Windows can still drop a confirmed point later, e.g. when C: fills up
+      (volsnap event 36). The recovery recipe (task 3) says so.
     - Also seen: volsnap event 36 at 16:20, when C: was full. Windows dropped every earlier
       restore point then, which is why `rstrui` showed none at all.
   - **Notes kept:**

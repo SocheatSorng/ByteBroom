@@ -35,11 +35,21 @@ pub enum RestorePoint {
     Failed(u32),
 }
 
-/// How many times the helper asks Windows to list a point it just made, and the pause between.
-/// Three minutes in all: the snapshot behind the point is taken after the call returns.
-pub const CONFIRM_TRIES: u32 = 90;
-/// See [`CONFIRM_TRIES`].
-pub const CONFIRM_PAUSE: std::time::Duration = std::time::Duration::from_secs(2);
+use std::time::Duration;
+
+/// How long the helper keeps asking Windows to list a point it just made (the snapshot behind
+/// the point is taken after the call returns), and the pause between asks.
+pub const CONFIRM_FOR: Duration = Duration::from_secs(180);
+/// See [`CONFIRM_FOR`].
+pub const CONFIRM_PAUSE: Duration = Duration::from_secs(2);
+/// The most one ask may take: WMI's connect limit (`WBEM_FLAG_CONNECT_USE_MAX_WAIT`, 2
+/// minutes) plus the row wait ([`ROW_WAIT_MS`]).
+pub const ONE_ASK_AT_MOST: Duration = Duration::from_secs(120 + 5);
+/// How long WMI may take to hand back the row, in milliseconds.
+pub const ROW_WAIT_MS: i32 = 5_000;
+/// How long the unelevated app waits for the helper: longer than the helper's worst case, so
+/// a stuck WMI can never hang the window (security review of the fix, should-fix 1).
+pub const APP_WAIT: Duration = Duration::from_secs(600);
 /// ByteBroom's own code in [`RestorePoint::Failed`]: Windows said the point was made, but it
 /// never appeared in the list of restore points.
 pub const NOT_LISTED: u32 = 0xB0B0_0001;
@@ -47,23 +57,30 @@ pub const NOT_LISTED: u32 = 0xB0B0_0001;
 /// Count a point as in place only once Windows lists it (the owner's check, 2026-11-25:
 /// `SRSetRestorePointW` reported success and System Restore logged the point, but the shadow
 /// copy behind it was taken after the helper exited, failed, and no point was left). `listed`
-/// asks Windows whether `sequence` is in the list (`None`: the question failed); `pause` waits
-/// between tries. The helper stays running meanwhile. Pure.
+/// asks Windows whether `sequence` is in the list (`None`: the question failed); `out_of_time`
+/// says whether [`CONFIRM_FOR`] has passed; `pause` waits between asks. The helper stays
+/// running meanwhile. Pure.
 pub fn confirm_listed(
     sequence: i64,
     mut listed: impl FnMut(i64) -> Option<bool>,
+    mut out_of_time: impl FnMut() -> bool,
     mut pause: impl FnMut(),
-    tries: u32,
 ) -> RestorePoint {
-    for attempt in 0..tries {
-        if attempt > 0 {
-            pause();
-        }
+    loop {
         if listed(sequence) == Some(true) {
             return RestorePoint::InPlace(sequence);
         }
+        if out_of_time() {
+            return RestorePoint::Failed(NOT_LISTED);
+        }
+        pause();
     }
-    RestorePoint::Failed(NOT_LISTED)
+}
+
+/// Whether a row WMI returned is the point asked for (review should-fix 2: don't trust the
+/// query's filter alone). `None`: the row had no readable number. Pure.
+pub fn row_matches(asked: i64, row_number: Option<i64>) -> bool {
+    row_number == Some(asked)
 }
 
 const ERROR_BAD_ENVIRONMENT: u32 = 10;
@@ -207,13 +224,13 @@ mod tests {
                 asks.set(asks.get() + 1);
                 Some(asks.get() == 3)
             },
+            || false,
             || pauses.set(pauses.get() + 1),
-            CONFIRM_TRIES,
         );
         assert_eq!(point, RestorePoint::InPlace(42));
         assert_eq!((asks.get(), pauses.get()), (3, 2));
 
-        // Never listed, or the question keeps failing: not in place, after every try.
+        // Never listed, or the question keeps failing: not in place once time is up.
         for answer in [Some(false), None] {
             let asks = Cell::new(0);
             let point = confirm_listed(
@@ -222,18 +239,28 @@ mod tests {
                     asks.set(asks.get() + 1);
                     answer
                 },
+                || asks.get() >= 5,
                 || {},
-                5,
             );
             assert_eq!(point, RestorePoint::Failed(NOT_LISTED), "{answer:?}");
             assert_eq!(asks.get(), 5);
             assert_eq!(exit_for(point), Exit::RestoreFailed);
         }
-        // Three minutes in all.
-        assert_eq!(
-            CONFIRM_PAUSE * (CONFIRM_TRIES - 1),
-            std::time::Duration::from_secs(178)
-        );
+    }
+
+    #[test]
+    fn only_a_row_with_the_asked_number_counts() {
+        assert!(row_matches(92, Some(92)));
+        assert!(!row_matches(92, Some(91)));
+        assert!(!row_matches(92, None));
+    }
+
+    #[test]
+    fn the_window_outlasts_the_helpers_worst_case() {
+        // Time is checked just before it runs out, then a pause and one more ask that takes
+        // as long as it may; plus System Restore's own calls, allowed 4 minutes.
+        let worst = CONFIRM_FOR + CONFIRM_PAUSE + ONE_ASK_AT_MOST + Duration::from_secs(240);
+        assert!(APP_WAIT > worst, "{APP_WAIT:?} vs {worst:?}");
     }
 
     #[test]

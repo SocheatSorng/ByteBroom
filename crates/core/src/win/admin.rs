@@ -36,7 +36,8 @@ use windows_sys::Win32::UI::Shell::{
 
 const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
 const ACCESS_DENIED_ACE_TYPE: u8 = 1;
-const INFINITE: u32 = u32::MAX;
+/// `WAIT_OBJECT_0` (synchapi.h): the process ended within the time limit.
+const WAIT_OBJECT_0: u32 = 0;
 const SW_HIDE: i32 = 0;
 
 /// The helper's folder name under Program Files, and its file name.
@@ -395,10 +396,17 @@ pub fn run_elevated(action: AdminAction, parent: isize) -> Result<Exit, LaunchEr
     let process = unsafe { OwnedHandle::from_raw_handle(info.hProcess) };
     let mut code = 0u32;
     // SAFETY: the handle is a live process handle we own.
-    let ok = unsafe {
-        WaitForSingleObject(process.as_raw_handle(), INFINITE);
-        GetExitCodeProcess(process.as_raw_handle(), &mut code)
-    };
+    // A time limit longer than the helper's worst case, so a stuck WMI can't hang the window
+    // (review of the restore point fix, should-fix 1).
+    let wait_ms = crate::restore::APP_WAIT.as_millis() as u32;
+    // SAFETY: the handle is a live process handle we own.
+    if unsafe { WaitForSingleObject(process.as_raw_handle(), wait_ms) } != WAIT_OBJECT_0 {
+        return Err(LaunchError::Failed(
+            "the helper didn't answer in time; nothing is assumed done".into(),
+        ));
+    }
+    // SAFETY: as above; the process has exited.
+    let ok = unsafe { GetExitCodeProcess(process.as_raw_handle(), &mut code) };
     if ok == 0 {
         return Err(LaunchError::Failed(
             std::io::Error::last_os_error().to_string(),
