@@ -122,7 +122,7 @@ Each task: code → tests → fmt + clippy → full tests → commit with a "why
     `pagefile.sys` (read from the folder listing, without opening them), and the size of
     `Windows.old` if it is readable; everything else says "needs admin". Nothing in this task can
     act; it only reports.
-- [ ] **7. From findings to a safe clean**
+- [x] **7. From findings to a safe clean**
   - Acceptance: a confirmed selection becomes a phase 1 `Policy` whose roots are the rules' own
     folders.
   - Closes the phase 1 review follow-up: `Policy::new` also refuses roots in sensitive places, such
@@ -130,6 +130,17 @@ Each task: code → tests → fmt + clippy → full tests → commit with a "why
     proposes roots.
   - Verify: the end-to-end test is fake profile → scan → select → delete → `verify-tree.ps1`, with
     only the selected items gone.
+  - Done as: the protected areas now also cover, under every profile, the Startup folder and
+    Windows' key and credential stores (`Protect`, `Credentials`, `Crypto`, `SystemCertificates`,
+    `Vault`, plus `.ssh` and `.gnupg`), and all of `ProgramData\Microsoft`. They are refused as
+    roots, as targets and as places to restore a moved file. A refused root leaves out only its
+    own items.
+  - Bug found by the end-to-end test: the large-file, duplicate and build-folder searches skipped
+    the whole profile on a real PC, because the profile root is protected as a delete target. The
+    task 4 and 5 tests missed it because their fake profile was not listed as a Windows profile;
+    they now list it, and fail with the old code.
+  - Follow-up for phase 3: a clean happens some time after its scan, so the window should scan
+    again (or at least re-check the 24-hour temp rule) right before acting.
 - [ ] **8. Speed**
   - Acceptance: a generated fake tree of 200,000 files in 20,000 folders is scanned in under 30
     seconds in a release build on the owner's PC; the result goes into this plan. The test lives

@@ -179,7 +179,7 @@ impl WinPath {
 }
 
 /// Case-insensitive comparison close to NTFS's: one-to-one upper-casing, no expansions.
-fn eq_ignore_case(a: &str, b: &str) -> bool {
+pub(crate) fn eq_ignore_case(a: &str, b: &str) -> bool {
     fn fold(c: char) -> char {
         let mut up = c.to_uppercase();
         match (up.next(), up.next()) {

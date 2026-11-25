@@ -3,7 +3,7 @@
 //! Pure: callers pass facts that the Windows adapter resolved from an open handle. Every check
 //! here can only refuse; nothing in this module widens what is allowed.
 
-use crate::paths::WinPath;
+use crate::paths::{WinPath, eq_ignore_case as part_eq_ignore_case};
 use std::fmt;
 
 /// Names directly under any drive root that are never acted on, whatever the UI asks.
@@ -25,6 +25,41 @@ pub const DENIED_AT_DRIVE_ROOT: [&str; 14] = [
     "$Windows.~WS",
     "Config.msi",
 ];
+
+/// Folders under **every** profile root that are never acted on, whole subtrees: Windows' key
+/// and credential stores (losing DPAPI's `Protect` keys loses every secret they encrypt), the
+/// per-user Startup folder (a file placed there runs at sign-in), and SSH/GPG keys. Paths assume
+/// the standard `AppData` layout; a redirected AppData is not covered here.
+pub const SENSITIVE_IN_PROFILE: [&str; 10] = [
+    "AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Startup",
+    "AppData\\Roaming\\Microsoft\\Protect",
+    "AppData\\Roaming\\Microsoft\\Credentials",
+    "AppData\\Local\\Microsoft\\Credentials",
+    "AppData\\Roaming\\Microsoft\\Crypto",
+    "AppData\\Roaming\\Microsoft\\SystemCertificates",
+    "AppData\\Roaming\\Microsoft\\Vault",
+    "AppData\\Local\\Microsoft\\Vault",
+    ".ssh",
+    ".gnupg",
+];
+
+/// Folders under `ProgramData` that are never acted on, whole subtrees. `Microsoft` holds the
+/// machine keys (`Crypto`), the all-users Startup folder and Defender's data.
+pub const SENSITIVE_IN_PROGRAM_DATA: [&str; 1] = ["Microsoft"];
+
+/// `path` is `base\rel` or inside it, ignoring case. Compares parts in place (no allocation),
+/// because the walker asks this for every entry it lists.
+fn inside_relative(path: &WinPath, base: &WinPath, rel: &str) -> bool {
+    let rel_count = rel.split('\\').count();
+    let (parts, base_parts) = (path.parts(), base.parts());
+    path.drive() == base.drive()
+        && parts.len() >= base_parts.len() + rel_count
+        && path.is_at_or_inside_ignore_case(base)
+        && parts[base_parts.len()..]
+            .iter()
+            .zip(rel.split('\\'))
+            .all(|(a, b)| part_eq_ignore_case(a, b))
+}
 
 /// Where Windows keeps its own folders on this PC. Built from the real environment by the
 /// Windows adapter, and from fake values in tests.
@@ -120,6 +155,19 @@ pub fn denied_reason(path: &WinPath, layout: &SystemLayout) -> Option<String> {
         .any(|area| path.is_at_or_inside_ignore_case(area))
     {
         return Some("a protected Windows folder".into());
+    }
+    if SENSITIVE_IN_PROGRAM_DATA
+        .iter()
+        .any(|rel| inside_relative(path, &layout.program_data, rel))
+    {
+        return Some("a protected Windows folder in ProgramData".into());
+    }
+    if layout.profile_roots.iter().any(|profile| {
+        SENSITIVE_IN_PROFILE
+            .iter()
+            .any(|rel| inside_relative(path, profile, rel))
+    }) {
+        return Some("a key, credential or startup folder".into());
     }
     if path.eq_ignore_case(&layout.program_data) {
         return Some("ProgramData itself".into());
@@ -347,5 +395,66 @@ mod tests {
             Refusal::OutsideAllowedRoots.to_string(),
             "outside the folders chosen for this clean"
         );
+    }
+
+    #[test]
+    fn key_credential_and_startup_folders_are_on_the_floor_in_every_profile() {
+        for profile in ["C:\\Users\\Ann", "C:\\Users\\Public"] {
+            for rel in SENSITIVE_IN_PROFILE {
+                let area = p(&format!("{profile}\\{rel}"));
+                let inside = area.join("x").unwrap();
+                let shouted = p(&area.to_string().to_uppercase());
+                for path in [&area, &inside, &shouted] {
+                    assert!(denied_reason(path, &layout()).is_some(), "{path}");
+                    let got = Policy::new(vec![resolved(&path.to_string())], layout());
+                    assert!(matches!(got, Err(Refusal::BadRoot(_))), "{path}: {got:?}");
+                }
+                // A broader root is allowed, but nothing inside the protected folder is. (.ssh
+                // and .gnupg sit directly in the profile, which can't be a root at all.)
+                if rel.starts_with("AppData\\") {
+                    let pol = policy(&[&format!("{profile}\\AppData")]);
+                    assert!(matches!(
+                        pol.check_target(&resolved(&inside.to_string())),
+                        Err(Refusal::DeniedArea(_))
+                    ));
+                    assert!(matches!(
+                        pol.check_container(&resolved(&area.to_string())),
+                        Err(Refusal::DeniedArea(_))
+                    ));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn program_data_microsoft_is_on_the_floor_but_other_apps_are_not() {
+        for bad in [
+            "C:\\ProgramData\\Microsoft",
+            "C:\\ProgramData\\microsoft\\Crypto\\RSA",
+            "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\StartUp",
+        ] {
+            assert!(denied_reason(&p(bad), &layout()).is_some(), "{bad}");
+        }
+        assert_eq!(
+            denied_reason(&p("C:\\ProgramData\\SomeApp\\cache"), &layout()),
+            None
+        );
+        assert_eq!(
+            denied_reason(&p("C:\\ProgramData\\MicrosoftEdgeCache"), &layout()),
+            None
+        );
+    }
+
+    #[test]
+    fn neighbours_of_protected_folders_are_not_caught() {
+        for ok in [
+            "C:\\Users\\Ann\\AppData\\Roaming\\Microsoft\\ProtectX",
+            "C:\\Users\\Ann\\AppData\\Local\\Microsoft\\Windows\\INetCache\\x",
+            "C:\\Users\\Ann\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\x",
+            "C:\\Users\\Bob\\AppData\\Roaming\\Microsoft\\Protect",
+            "D:\\Users\\Ann\\.ssh",
+        ] {
+            assert_eq!(denied_reason(&p(ok), &layout()), None, "{ok}");
+        }
     }
 }

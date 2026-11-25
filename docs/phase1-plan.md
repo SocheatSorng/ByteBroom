@@ -163,6 +163,7 @@ files and links in the folders being cleaned while ByteBroom runs as administrat
   signature on each line). Undo already refuses anything outside the allowed roots.
 - **Phase 2 (scanner):** when the scanner, not the owner, picks roots, revisit sensitive
   `ProgramData` subfolders (`Microsoft\Crypto`, the Startup folder) as roots or destinations.
+  *Done in phase 2 task 7:* see `docs/phase2-plan.md`.
 - **Phase 3 (UI):** show cloud placeholders (OneDrive) as "cloud file", not as "link".
 - **Not verifiable locally:** the real `SHFileOperationW` call with the folder chain held is
   exercised only by CI and the owner's opt-in check.
