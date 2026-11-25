@@ -61,6 +61,14 @@ fn inside_relative(path: &WinPath, base: &WinPath, rel: &str) -> bool {
             .all(|(a, b)| part_eq_ignore_case(a, b))
 }
 
+/// Some part of `path` is a "never listed" name (e.g. `.ssh`, `Login Data`, `x.kdbx`). The
+/// scanner never enters or reports these; the engine refuses to act on them or anything inside.
+fn has_never_listed_part(path: &WinPath) -> bool {
+    path.parts()
+        .iter()
+        .any(|p| crate::rules::is_never_listed(p))
+}
+
 /// Where Windows keeps its own folders on this PC. Built from the real environment by the
 /// Windows adapter, and from fake values in tests.
 #[derive(Debug, Clone)]
@@ -98,6 +106,9 @@ pub enum Refusal {
     DeniedArea(String),
     /// An allowed root is too broad or sits in a denied area.
     BadRoot(String),
+    /// The target is, or is inside, a "never listed" item: a key, password vault, wallet or
+    /// browser login file (see `rules::is_never_listed`).
+    NeverListed,
 }
 
 impl fmt::Display for Refusal {
@@ -107,6 +118,10 @@ impl fmt::Display for Refusal {
             Self::OutsideAllowedRoots => write!(f, "outside the folders chosen for this clean"),
             Self::DeniedArea(why) => write!(f, "protected Windows area: {why}"),
             Self::BadRoot(why) => write!(f, "this folder can't be cleaned as a whole: {why}"),
+            Self::NeverListed => write!(
+                f,
+                "keys, password vaults, wallets and browser logins are never touched"
+            ),
         }
     }
 }
@@ -228,6 +243,9 @@ impl Policy {
         if folder.is_reparse_point {
             return Err(Refusal::ReparsePoint);
         }
+        if has_never_listed_part(&folder.final_path) {
+            return Err(Refusal::NeverListed);
+        }
         let is_root = self.roots.contains(&folder.final_path);
         if !is_root
             && !self
@@ -248,6 +266,11 @@ impl Policy {
     pub fn check_target(&self, target: &ResolvedPath) -> Result<(), Refusal> {
         if target.is_reparse_point {
             return Err(Refusal::ReparsePoint);
+        }
+        // Checked here, where every delete, recycle and move passes, so emptying a folder the
+        // scan offered (say Temp\extract1) can never take a vault or key found inside it.
+        if has_never_listed_part(&target.final_path) {
+            return Err(Refusal::NeverListed);
         }
         if !self
             .roots
@@ -395,6 +418,43 @@ mod tests {
             Refusal::OutsideAllowedRoots.to_string(),
             "outside the folders chosen for this clean"
         );
+    }
+
+    #[test]
+    fn never_listed_items_and_everything_inside_them_are_refused() {
+        let pol = policy(&["C:\\Users\\Ann\\AppData\\Local\\Temp"]);
+        let t = "C:\\Users\\Ann\\AppData\\Local\\Temp\\extract1";
+        for bad in [
+            "vault.kdbx",
+            "Login Data",
+            "Cookies-journal",
+            "id.PEM",
+            ".ssh",
+            ".ssh\\id_rsa",
+            "wallet.dat",
+            "keys.agilekeychain\\data",
+        ] {
+            let path = format!("{t}\\{bad}");
+            assert_eq!(
+                pol.check_target(&resolved(&path)),
+                Err(Refusal::NeverListed),
+                "{path}"
+            );
+            assert_eq!(
+                pol.check_container(&resolved(&path)),
+                Err(Refusal::NeverListed),
+                "{path}"
+            );
+        }
+        // Their neighbours are fine.
+        for ok in ["a.tmp", "History.txt", "key", "ssh"] {
+            assert_eq!(
+                pol.check_target(&resolved(&format!("{t}\\{ok}"))),
+                Ok(()),
+                "{ok}"
+            );
+        }
+        assert!(Refusal::NeverListed.to_string().contains("never touched"));
     }
 
     #[test]

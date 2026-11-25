@@ -285,3 +285,57 @@ fn a_root_swapped_for_a_junction_after_the_scan_is_refused() {
     assert_eq!(ready.refused.len(), 1);
     assert!(decoy.join("app.dmp").exists());
 }
+
+/// Security review must-fix M1: a folder the scan offers (pre-ticked) may hold a vault, a key or
+/// a browser login file. Emptying the folder must take everything else and leave those.
+#[test]
+fn emptying_an_offered_folder_never_takes_keys_vaults_or_logins() {
+    let h = Home::new("clean-never-listed");
+    let extract = h.local.join("Temp").join("extract1");
+    old(&extract.join("a.tmp"), &[1; 10]);
+    old(&extract.join("vault.kdbx"), &[2; 10]);
+    old(&extract.join("Login Data"), &[3; 10]);
+    old(&extract.join(".ssh").join("id_ed25519"), &[4; 10]);
+    old(&extract.join("deep").join("server.pem"), &[5; 10]);
+    old(&extract.join("deep").join("b.tmp"), &[6; 10]);
+
+    let findings = h.findings();
+    let i = findings
+        .iter()
+        .position(|f| h.rel(&f.path) == "AppData\\Local\\Temp\\extract1")
+        .expect("the folder is offered");
+    assert!(findings[i].pre_ticked);
+    let plan = plan_clean(&findings, &[i]).unwrap();
+    let ready = prepare(&plan, &h.layout());
+    let outcome = delete_permanently(&ready.policy.unwrap(), &ready.targets);
+
+    assert!(!extract.join("a.tmp").exists());
+    assert!(!extract.join("deep").join("b.tmp").exists());
+    for kept in [
+        extract.join("vault.kdbx"),
+        extract.join("Login Data"),
+        extract.join(".ssh").join("id_ed25519"),
+        extract.join("deep").join("server.pem"),
+    ] {
+        assert!(kept.exists(), "{} was deleted", kept.display());
+    }
+    let refused = outcome
+        .skipped
+        .iter()
+        .filter(|s| {
+            s.reason
+                == bytebroom_core::engine::SkipReason::Refused(
+                    bytebroom_core::policy::Refusal::NeverListed,
+                )
+        })
+        .count();
+    assert_eq!(refused, 4, "{:?}", outcome.skipped);
+    // The folders that still hold them are kept, and say why.
+    assert!(extract.exists());
+    assert!(
+        outcome
+            .skipped
+            .iter()
+            .any(|s| s.reason == bytebroom_core::engine::SkipReason::NotEmpty)
+    );
+}
