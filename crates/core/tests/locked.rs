@@ -220,7 +220,11 @@ fn only_the_move_and_history_modules_and_the_window_read_the_journals() {
         .join("..")
         .join("..");
     let mut readers = Vec::new();
-    let mut stack = vec![repo.join("crates"), repo.join("src-tauri").join("src")];
+    let mut stack = vec![
+        repo.join("crates"),
+        repo.join("src-tauri").join("src"),
+        repo.join("src-tauri").join("examples"),
+    ];
     while let Some(dir) = stack.pop() {
         for entry in fs::read_dir(&dir).unwrap().flatten() {
             let p = entry.path();
@@ -230,27 +234,7 @@ fn only_the_move_and_history_modules_and_the_window_read_the_journals() {
                 }
             } else if p.extension().is_some_and(|e| e == "rs") {
                 let text = fs::read_to_string(&p).unwrap();
-                // Any mention counts (an import alias still names the item), and undo too:
-                // it restores bytes into the cleaned folders, so it must stay unelevated and
-                // in the move module (re-review R2). A tripwire, not a proof.
-                if [
-                    "read_journal",
-                    ".entries()",
-                    "undo_move",
-                    "JournalEntry::parse",
-                    // Phase 5: every other way in to the journals' contents.
-                    "JournalLine",
-                    "parse_lines",
-                    "move_history",
-                    "undo_entries",
-                    "RecycledJournal",
-                    "RecycledRecord::parse",
-                    ".records()",
-                    "clear_history",
-                ]
-                .iter()
-                .any(|name| text.contains(name))
-                {
+                if names_a_journal(&text) {
                     let rel = p.strip_prefix(&repo).unwrap().to_string_lossy();
                     readers.push(rel.replace('\\', "/"));
                 }
@@ -262,15 +246,60 @@ fn only_the_move_and_history_modules_and_the_window_read_the_journals() {
         readers.iter().all(|r| !r.starts_with("crates/admin")),
         "the elevated helper must never read a journal: {readers:?}"
     );
+    // The window's journal use is all in one module (security review, phase 5, S2), not
+    // spread through lib.rs next to the elevated helper's plumbing.
     assert_eq!(
         readers,
         vec![
             "crates/core/src/history.rs".to_string(),
             "crates/core/src/relocate.rs".to_string(),
-            "src-tauri/src/lib.rs".to_string(),
+            "src-tauri/src/history_cmd.rs".to_string(),
         ],
         "{readers:?}"
     );
+}
+
+/// Does this source name any way in to the journals? Any mention counts (an import alias still
+/// names the item), and undo too: it restores bytes into the cleaned folders, so it must stay
+/// unelevated (re-review R2). A tripwire, not a proof.
+fn names_a_journal(text: &str) -> bool {
+    [
+        "read_journal",
+        ".entries()",
+        "undo_move",
+        "JournalEntry::parse",
+        // Phase 5: every other way in to the journals' contents, and their names.
+        "Journal::open",
+        "JournalLine",
+        "parse_lines",
+        "move_history",
+        "undo_entries",
+        "undo_policy",
+        "RecycledJournal",
+        "RecycledRecord::parse",
+        ".records()",
+        "history::clear_history",
+        "HISTORY_FILES",
+        "moves.journal",
+        "recycled.journal",
+    ]
+    .iter()
+    .any(|name| text.contains(name))
+}
+
+#[test]
+fn the_journal_tripwire_catches_the_plain_ways_in() {
+    for caught in [
+        "Journal::open(&d, \"moves.journal\")",
+        "std::fs::read_to_string(dir.join(\"moves.journal\"))",
+        "std::fs::read(p.join(\"recycled.journal\"))",
+        "use bytebroom_core::history::HISTORY_FILES;",
+        "bytebroom_core::history::clear_history(false, &dir)",
+        "undo_policy(&at, &layout, e)",
+    ] {
+        assert!(names_a_journal(caught), "{caught}");
+    }
+    assert!(!names_a_journal("let lines = text.lines();"));
 }
 
 #[test]

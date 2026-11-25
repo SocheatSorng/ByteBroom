@@ -222,7 +222,8 @@ fn the_window_commands_and_promises_match_the_code() {
     let history = read("crates/core/src/history.rs");
     assert!(history.contains("[\"moves.journal\", RecycledJournal::NAME]"));
     assert!(history.contains("NAME: &'static str = \"recycled.journal\""));
-    assert!(lib.contains("HISTORY_FILES[0]"));
+    assert!(read("src-tauri/src/history_cmd.rs").contains("HISTORY_FILES[0]"));
+    assert!(lib.contains("history_cmd::open_journal(&dir)"));
     assert!(readme.contains("`ByteBroom\\recycled.journal`"));
     assert!(readme.contains("`ByteBroom\\bytebroom.log`"));
     assert!(confirm.contains("\"bytebroom.log\""));

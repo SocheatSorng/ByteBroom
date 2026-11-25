@@ -120,8 +120,10 @@ fn every_command_is_on_the_list_and_registered() {
         .expect("one generate_handler! in lib.rs");
     let mut registered: Vec<String> = handler
         .split(',')
-        .map(|s| s.trim().to_string())
+        .map(|s| s.trim())
         .filter(|s| !s.is_empty())
+        // The history commands live in `history_cmd` (phase 5) and are registered by path.
+        .map(|s| s.strip_prefix("history_cmd::").unwrap_or(s).to_string())
         .collect();
     registered.sort();
     assert_eq!(registered, sorted(&COMMANDS));
@@ -501,5 +503,41 @@ fn red_actions_ask_natively_before_acting() {
     let boundary = read("src/boundary.rs");
     for v in ["RecycleBin", "DeliveryOptimization", "Hibernation"] {
         assert!(boundary.contains(&format!("    {v},")), "{v}");
+    }
+}
+
+/// Security review, phase 5, S1: the journals are user-writable, so putting back and clearing
+/// refuse to run with an administrator token, before touching any journal, and pass Windows'
+/// own answer on to the core, which refuses too.
+#[test]
+fn put_back_and_clear_history_refuse_to_run_elevated() {
+    let cmds = read("src/history_cmd.rs");
+    assert!(cmds.contains("bytebroom_core::win::admin::is_elevated()"));
+    for (command, acts) in [
+        ("pub async fn put_back(", "undo_entries("),
+        ("pub async fn clear_history(", "history::clear_history("),
+    ] {
+        let body = cmds
+            .split(command)
+            .nth(1)
+            .and_then(|s| s.split("#[tauri::command]").next())
+            .unwrap_or_else(|| panic!("{command} in history_cmd.rs"));
+        let gate = body
+            .find("refuse_if_elevated(elevated())?")
+            .unwrap_or_else(|| panic!("{command} does not refuse when elevated"));
+        let lock = body.find("history.lock()").expect("takes the history lock");
+        let act = body.find(acts).expect("acts");
+        assert!(
+            gate < lock && gate < act,
+            "{command}: the gate must come first"
+        );
+        // The core gets Windows' answer, not a constant.
+        assert!(
+            body[act..]
+                .trim_start_matches(acts)
+                .trim_start()
+                .starts_with("elevated()"),
+            "{command} passes elevated() to the core"
+        );
     }
 }

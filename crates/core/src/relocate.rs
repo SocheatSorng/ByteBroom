@@ -741,6 +741,10 @@ pub fn undo_move(policy: &Policy, entry: &JournalEntry) -> Result<(), String> {
     result
 }
 
+/// How an undo's error starts when the file is back and checked, but the moved copy could not be
+/// removed: both copies exist. Not "nothing changed".
+pub const COPY_KEPT: &str = "put back, but the moved copy could not be removed";
+
 /// How many missing folders an undo may make again (a moved folder's files go back into it).
 const MAX_RECREATED: usize = 32;
 
@@ -770,6 +774,11 @@ fn hold_original_folder(
             Err(e) => return Err(format!("the original folder: {e}")),
         }
     };
+    // The folder held must be the one the journal names, not one reached through a link
+    // planted on the way (security review, phase 5, S4).
+    if !held.path.eq_ignore_case(&at) {
+        return Err("the original folder is reached through a link".into());
+    }
     policy
         .check_container(&container(&held.path))
         .map_err(|r| format!("the original folder: {r}"))?;
@@ -865,7 +874,9 @@ fn restore_into(
     match (copied, checked) {
         (Ok(_), Ok((s, h))) if s == entry.size && h == entry.sha256 => {
             drop(restored);
-            win::delete_by_handle(moved).map_err(|e| e.to_string())
+            // The file is back and checked; only removing the moved copy failed. Say so, so it
+            // is never reported as "nothing changed" (security review, phase 5, S3).
+            win::delete_by_handle(moved).map_err(|e| format!("{COPY_KEPT} ({e})"))
         }
         _ => {
             let _ = restored.delete();

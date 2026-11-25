@@ -502,6 +502,12 @@ pub fn put_back_message(
                 "\n{}: put back, but the history could not record it.",
                 file_name(&e.source)
             )),
+            UndoResult::PutBackCopyKept(_) => text.push_str(&format!(
+                "\n{}: put back and checked, but the moved copy could not be removed: it is \
+                 still in {}. Delete that copy yourself when you are sure.",
+                file_name(&e.source),
+                e.dest
+            )),
             UndoResult::Refused(why) => {
                 text.push_str(&format!("\n{}: {why}.", file_name(&e.source)));
             }
@@ -698,16 +704,26 @@ mod tests {
             ),
             "f1.iso was not put back.\nf1.iso: it was already put back."
         );
-        let two = [moved(1, None).entry, moved(2, None).entry];
+        let three = [
+            moved(1, None).entry,
+            moved(2, None).entry,
+            moved(3, None).entry,
+        ];
         let text = put_back_message(
-            &two,
+            &three,
             &[
                 UndoResult::PutBackNotRecorded("disk full".into()),
                 UndoResult::Refused("something is already at the original place".into()),
+                UndoResult::PutBackCopyKept("in use".into()),
             ],
         );
-        assert!(text.starts_with("Put back 1 of 2 files."), "{text}");
+        assert!(text.starts_with("Put back 2 of 3 files."), "{text}");
         assert!(text.contains("f1.iso: put back, but the history could not record it."));
         assert!(text.contains("f2.iso: something is already at the original place."));
+        // Security review, phase 5, S3: a kept copy is never "not put back".
+        assert!(
+            text.contains("f3.iso: put back and checked, but the moved copy could not be removed: it is still in D:\\Keep\\f3.iso."),
+            "{text}"
+        );
     }
 }

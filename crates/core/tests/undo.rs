@@ -5,13 +5,13 @@
 mod common;
 
 use bytebroom_core::history::{
-    ALREADY_PUT_BACK, HISTORY_FILES, RecycledJournal, RecycledRecord, UndoResult, clear_history,
-    move_history, undo_entries, undo_policy,
+    ALREADY_PUT_BACK, ELEVATED_REFUSAL, HISTORY_FILES, RecycledJournal, RecycledRecord, UndoResult,
+    clear_history, move_history, refuse_if_elevated, undo_entries, undo_policy,
 };
 use bytebroom_core::locations::Locations;
 use bytebroom_core::paths::WinPath;
 use bytebroom_core::policy::Policy;
-use bytebroom_core::relocate::{JournalEntry, JournalLine, move_to, undo_move};
+use bytebroom_core::relocate::{COPY_KEPT, JournalEntry, JournalLine, move_to, undo_move};
 use bytebroom_core::win::dir::lock_dir;
 use bytebroom_core::win::{Access, open_no_follow, system_layout};
 use common::*;
@@ -63,7 +63,13 @@ impl Setup {
 
     fn undo(&self, wanted: &[JournalEntry]) -> Vec<UndoResult> {
         let pol = self.pol.clone();
-        undo_entries(&self.journal(), wanted, &|_| Ok(pol.clone()), &undo_move)
+        undo_entries(
+            false,
+            &self.journal(),
+            wanted,
+            &|_| Ok(pol.clone()),
+            &undo_move,
+        )
     }
 }
 
@@ -112,14 +118,19 @@ fn a_failed_undo_writes_no_put_back_line() {
     let s = setup();
     let entries = s.move_it(&s.tree.root.join("junk").join("a.tmp"));
     let pol = s.pol.clone();
-    let got = undo_entries(&s.journal(), &entries, &|_| Ok(pol.clone()), &|_, _| {
-        Err("broke".into())
-    });
+    let got = undo_entries(
+        false,
+        &s.journal(),
+        &entries,
+        &|_| Ok(pol.clone()),
+        &|_, _| Err("broke".into()),
+    );
     assert_eq!(got, vec![UndoResult::Refused("broke".into())]);
     let lines = s.journal().lines().unwrap();
     assert!(lines.iter().all(|l| matches!(l, JournalLine::Move(_))));
     // And a refused policy stops it before anything is tried.
     let got = undo_entries(
+        false,
         &s.journal(),
         &entries,
         &|_| Err("not here".into()),
@@ -231,7 +242,7 @@ fn clearing_the_history_removes_both_journals_and_nothing_else() {
         .unwrap();
     write_file(&s.app.join("bytebroom.log"), b"counts only");
 
-    clear_history(&held).unwrap();
+    clear_history(false, &held).unwrap();
     for name in HISTORY_FILES {
         assert!(!s.app.join(name).exists(), "{name}");
     }
@@ -241,7 +252,7 @@ fn clearing_the_history_removes_both_journals_and_nothing_else() {
         "clearing never touches the files"
     );
     // Clearing again, with nothing there, is fine.
-    clear_history(&held).unwrap();
+    clear_history(false, &held).unwrap();
 }
 
 #[test]
@@ -253,7 +264,7 @@ fn clearing_refuses_a_journal_that_is_a_hard_link_and_keeps_its_target() {
     )
     .unwrap();
     let held = lock_dir(&wp(&s.app)).unwrap();
-    assert!(clear_history(&held).is_err());
+    assert!(clear_history(false, &held).is_err());
     assert_eq!(
         fs::read(s.tree.sentinel.join("keep.txt")).unwrap(),
         b"the sentinel must survive"
@@ -275,4 +286,122 @@ fn the_recycled_journal_reads_back_what_was_written() {
     j.append(std::slice::from_ref(&r)).unwrap();
     j.append(&[]).unwrap();
     assert_eq!(j.records().unwrap(), vec![r]);
+}
+
+/// Security review, phase 5, S1: run as administrator, nothing is put back or cleared, and the
+/// journals are left exactly as they were.
+#[test]
+fn nothing_is_put_back_or_cleared_when_elevated() {
+    let s = setup();
+    let source = s.tree.root.join("junk").join("a.tmp");
+    let entries = s.move_it(&source);
+    let before = fs::read(s.app.join("moves.journal")).unwrap();
+    let got = undo_entries(
+        true,
+        &s.journal(),
+        &entries,
+        &|_| panic!("no policy when elevated"),
+        &|_, _| panic!("no undo when elevated"),
+    );
+    assert_eq!(got, vec![UndoResult::Refused(ELEVATED_REFUSAL.into())]);
+    assert!(!source.exists());
+    let held = lock_dir(&wp(&s.app)).unwrap();
+    assert_eq!(clear_history(true, &held), Err(ELEVATED_REFUSAL.into()));
+    assert_eq!(fs::read(s.app.join("moves.journal")).unwrap(), before);
+    assert_eq!(refuse_if_elevated(false), Ok(()));
+}
+
+/// Security review, phase 5, S3: the file is back and checked but the moved copy stayed; that is
+/// recorded as put back, never reported as "nothing changed".
+#[test]
+fn a_kept_moved_copy_is_reported_and_recorded() {
+    let s = setup();
+    let entries = s.move_it(&s.tree.root.join("junk").join("a.tmp"));
+    let pol = s.pol.clone();
+    let got = undo_entries(
+        false,
+        &s.journal(),
+        &entries,
+        &|_| Ok(pol.clone()),
+        &|_, _| Err(format!("{COPY_KEPT} (in use)")),
+    );
+    assert!(
+        matches!(&got[0], UndoResult::PutBackCopyKept(w) if w.contains("in use")),
+        "{got:?}"
+    );
+    let history = move_history(&s.journal().lines().unwrap());
+    assert!(history[0].undone.is_some());
+}
+
+/// Security review, phase 5, S4: a junction planted on the way to the original folder is never
+/// followed: nothing is restored or made in the folder it points to.
+#[test]
+fn a_junction_on_the_way_to_the_original_folder_is_refused() {
+    let s = setup();
+    let entries = s.move_it(&s.tree.root.join("junk").join("a.tmp"));
+    let b = s.tree.root.join("b");
+    fs::create_dir(&b).unwrap();
+    make_junction(&s.tree.root.join("a"), &b);
+    for source in [
+        s.tree.root.join("a").join("a.tmp"),
+        s.tree.root.join("a").join("missing").join("a.tmp"),
+    ] {
+        let forged = JournalEntry {
+            source: wp(&source),
+            ..entries[0].clone()
+        };
+        assert!(undo_move(&s.pol, &forged).is_err(), "{source:?}");
+        assert_eq!(
+            fs::read_dir(&b).unwrap().count(),
+            0,
+            "nothing lands in the target"
+        );
+    }
+    assert!(s.dest.join("a.tmp").exists());
+    fs::remove_dir(s.tree.root.join("a")).unwrap();
+}
+
+/// Security review, phase 5, note 5: even inside the profile, a forged line can't put a file into
+/// the startup folder, the WindowsApps folder on the PATH, or ByteBroom's own folder.
+#[test]
+fn the_undo_policy_refuses_startup_path_and_bytebroom_folders() {
+    let s = setup();
+    let profile = s.tree.root.clone();
+    let at = Locations {
+        profile: Some(wp(&profile)),
+        local_app_data: Some(wp(&profile.join("AppData").join("Local"))),
+        ..Locations::default()
+    };
+    for source in [
+        r"AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\x.exe",
+        r"AppData\Local\Microsoft\WindowsApps\x.exe",
+        r"AppData\Local\ByteBroom\moves.journal",
+    ] {
+        let entry = JournalEntry {
+            clean: Some(1),
+            time: 1,
+            sha256: "0F".repeat(32),
+            size: 1,
+            source: wp(&profile.join(source)),
+            dest: wp(&s.dest.join("x")),
+        };
+        let err = undo_policy(&at, &system_layout(), &entry).unwrap_err();
+        assert!(err.contains("never puts files back"), "{source}: {err}");
+    }
+}
+
+/// Security review, phase 5, note 7: a junction named like a journal is refused by clear, and
+/// what it points to survives.
+#[test]
+fn clearing_refuses_a_journal_that_is_a_junction() {
+    let s = setup();
+    make_junction(&s.app.join("moves.journal"), &s.tree.sentinel);
+    let held = lock_dir(&wp(&s.app)).unwrap();
+    assert!(clear_history(false, &held).is_err());
+    assert_eq!(
+        fs::read(s.tree.sentinel.join("keep.txt")).unwrap(),
+        b"the sentinel must survive"
+    );
+    drop(held);
+    fs::remove_dir(s.app.join("moves.journal")).unwrap();
 }

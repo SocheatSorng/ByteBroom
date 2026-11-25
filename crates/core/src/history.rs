@@ -63,6 +63,9 @@ pub enum UndoResult {
     /// The file is back, but the journal could not record it: the history still shows it as
     /// moved, and a second try is refused safely (the moved copy is gone).
     PutBackNotRecorded(String),
+    /// The file is back and checked, but the moved copy could not be removed: both exist. The
+    /// put-back is recorded, since the original place holds the checked file again.
+    PutBackCopyKept(String),
     /// Nothing was changed.
     Refused(String),
 }
@@ -70,16 +73,38 @@ pub enum UndoResult {
 /// The words for a move that was already put back.
 pub const ALREADY_PUT_BACK: &str = "it was already put back";
 
-/// Put back each of `wanted`, in order. For every item the journal is read again, through the
-/// held handle: an item that is no longer there, or already put back, is refused. Otherwise
-/// `undo` runs under the policy `policy_for` gives (the real one: [`undo_policy`] and
-/// [`undo_move`]), and only after it succeeded is "put back" appended.
+/// Why nothing is put back or cleared while ByteBroom runs as administrator.
+pub const ELEVATED_REFUSAL: &str = "ByteBroom is running as administrator: open it normally to put files back or clear the history";
+
+/// Putting back and clearing never run elevated (rule S3; security review, phase 5, S1): the
+/// journals are user-writable, and run as administrator a forged line could plant a file in a
+/// folder only administrators may write. The window passes Windows' own answer
+/// (`win::admin::is_elevated`).
+pub fn refuse_if_elevated(elevated: bool) -> Result<(), String> {
+    if elevated {
+        Err(ELEVATED_REFUSAL.into())
+    } else {
+        Ok(())
+    }
+}
+
+/// Put back each of `wanted`, in order. Refused outright when `elevated`. For every item the
+/// journal is read again, through the held handle: an item that is no longer there, or already
+/// put back, is refused. Otherwise `undo` runs under the policy `policy_for` gives (the real one:
+/// [`undo_policy`] and [`undo_move`]), and only after it succeeded is "put back" appended.
 pub fn undo_entries(
+    elevated: bool,
     journal: &Journal,
     wanted: &[JournalEntry],
     policy_for: &dyn Fn(&JournalEntry) -> Result<Policy, String>,
     undo: &dyn Fn(&Policy, &JournalEntry) -> Result<(), String>,
 ) -> Vec<UndoResult> {
+    if let Err(why) = refuse_if_elevated(elevated) {
+        return wanted
+            .iter()
+            .map(|_| UndoResult::Refused(why.clone()))
+            .collect();
+    }
     wanted
         .iter()
         .map(|entry| undo_one(journal, entry, policy_for, undo))
@@ -108,13 +133,34 @@ fn undo_one(
         Ok(p) => p,
         Err(why) => return UndoResult::Refused(why),
     };
-    if let Err(why) = undo(&policy, entry) {
-        return UndoResult::Refused(why);
+    let copy_kept = match undo(&policy, entry) {
+        Ok(()) => None,
+        Err(why) if why.starts_with(crate::relocate::COPY_KEPT) => Some(why),
+        Err(why) => return UndoResult::Refused(why),
+    };
+    match (
+        journal.append_undone(&Undone::of(entry, now_secs())),
+        copy_kept,
+    ) {
+        (Ok(()), None) => UndoResult::PutBack,
+        (_, Some(why)) => UndoResult::PutBackCopyKept(why),
+        (Err(e), None) => UndoResult::PutBackNotRecorded(e),
     }
-    match journal.append_undone(&Undone::of(entry, now_secs())) {
-        Ok(()) => UndoResult::PutBack,
-        Err(e) => UndoResult::PutBackNotRecorded(e),
-    }
+}
+
+/// Places a forged journal line must never put a file back into, even inside the profile:
+/// Windows' startup folder, the folder of app shortcuts on the PATH, and ByteBroom's own folder
+/// (security review, phase 5, note 5).
+fn never_put_back_into(at: &Locations, folder: &WinPath) -> bool {
+    let under = |base: Option<&WinPath>, parts: &[&str]| {
+        base.and_then(|b| parts.iter().try_fold(b.clone(), |acc, p| acc.join(p).ok()))
+            .is_some_and(|p| folder.is_at_or_inside_ignore_case(&p))
+    };
+    under(
+        at.profile.as_ref(),
+        &["AppData", "Roaming", "Microsoft", "Windows", "Start Menu"],
+    ) || under(at.local_app_data.as_ref(), &["Microsoft", "WindowsApps"])
+        || under(at.local_app_data.as_ref(), &["ByteBroom"])
 }
 
 /// The policy a move is put back under. The nearest folder above the original that still exists
@@ -134,6 +180,11 @@ pub fn undo_policy(
             || at.other_drives.iter().any(|r| p.is_strictly_inside(r))
     };
     let mut folder = parent(&entry.source).ok_or("the original path has no folder")?;
+    if never_put_back_into(at, &folder) {
+        return Err(
+            "ByteBroom never puts files back into that folder; move it back by hand".into(),
+        );
+    }
     loop {
         if !scanned(&folder) {
             return Err(
@@ -301,7 +352,8 @@ pub const HISTORY_FILES: [&str; 2] = ["moves.journal", RecycledJournal::NAME];
 ///
 /// A file just written can be held for a moment by another program (an antivirus scan, seen in
 /// the tests), so a "file in use" is tried again a few times before it is reported.
-pub fn clear_history(dir: &LockedDir) -> Result<(), String> {
+pub fn clear_history(elevated: bool, dir: &LockedDir) -> Result<(), String> {
+    refuse_if_elevated(elevated)?;
     const SHARING_VIOLATION: i32 = 32;
     for name in HISTORY_FILES {
         let mut tries = 0;
