@@ -141,10 +141,21 @@ Each task: code → tests → fmt + clippy → full tests → commit with a "why
     they now list it, and fail with the old code.
   - Follow-up for phase 3: a clean happens some time after its scan, so the window should scan
     again (or at least re-check the 24-hour temp rule) right before acting.
-- [ ] **8. Speed**
+- [x] **8. Speed**
   - Acceptance: a generated fake tree of 200,000 files in 20,000 folders is scanned in under 30
     seconds in a release build on the owner's PC; the result goes into this plan. The test lives
     behind `#[ignore]`, so normal test runs stay quick.
+  - Run with `cargo test --release -p bytebroom-core --test speed -- --ignored --nocapture`.
+  - Result (2026-11-25, owner's PC, release build, 200,000 files in 20,204 folders):
+    - **full scan, every rule: 18.9 s** (target met). It walks the profile twice (the large-file
+      and duplicate search, then the build-folder search), 400,000 files in all;
+    - the walker alone, once over the profile: 12.4 s;
+    - generating the tree took 389 s and removing it 44 s (not part of the measurement).
+  - Caveat: the files had just been written, so Windows' cache was warm. A first scan after a
+    restart will be slower; the owner's check (task 11) gives the real-drive number.
+  - Not needed now; if a real drive is too slow, merge the scan's two passes over the profile (the
+    large-file and duplicate search, then the build-folder search) into one, before anything
+    lower-level.
 - [ ] **9. Read-only scan tool**
   - Acceptance: `cargo run --release -p bytebroom-scan` prints the totals for each category and
     tier, the 20 largest findings and how many folders it could not read.
