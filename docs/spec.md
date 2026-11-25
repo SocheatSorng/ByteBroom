@@ -102,7 +102,9 @@ pub fn check_target(target: &ResolvedPath, policy: &Policy) -> Result<Tier, Refu
 5. **Move = copy, verify, then delete.** Each file is copied to the destination and checked by size and
    SHA-256 before the source is removed. Every move is written to a journal in `%LOCALAPPDATA%\ByteBroom`,
    so it can be undone. The journal is user-writable, so its entries are untrusted:
-   - only the unelevated undo reads it (a test sweeps the source for any other reader);
+   - only the undo in the move module reads it (a test sweeps the source for any other reader
+     or caller). Undo always runs unelevated, with the owner's own rights: run elevated, a
+     forged entry could plant the owner's bytes in a folder only administrators may write;
    - undo re-checks both ends: the original folder against the policy, and the moved file at
      exactly the journalled path, off the hard floor, with one name and the journalled hash.
 

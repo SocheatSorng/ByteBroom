@@ -226,7 +226,18 @@ fn only_the_move_module_reads_the_journal() {
                 }
             } else if p.extension().is_some_and(|e| e == "rs") {
                 let text = fs::read_to_string(&p).unwrap();
-                if text.contains("read_journal(") || text.contains(".entries()") {
+                // Any mention counts (an import alias still names the item), and undo too:
+                // it restores bytes into the cleaned folders, so it must stay unelevated and
+                // in the move module (re-review R2). A tripwire, not a proof.
+                if [
+                    "read_journal",
+                    ".entries()",
+                    "undo_move",
+                    "JournalEntry::parse",
+                ]
+                .iter()
+                .any(|name| text.contains(name))
+                {
                     readers.push(p.file_name().unwrap().to_string_lossy().into_owned());
                 }
             }

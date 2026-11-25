@@ -83,6 +83,20 @@ Commit `7bca314`, all checks and the release build pass:
 - **Still notes:**
   - N1: a name differing only in case refuses, failing safe;
   - N4: UIPI blocks fake clicks once elevated.
+- **Re-review** (2026-11-25): no must-fix. Fixed with tests:
+  - **R1:** the shell parses names through its namespace, where a folder made into a "folder
+    shortcut" by a planted `desktop.ini` could point elsewhere. The shell item must be exactly
+    the checked path, both before the delete is queued and again in `PreDeleteItem`, which
+    stops the shell otherwise. COM runs in-process only. The test builds a real folder shortcut
+    in temp and parses through it (nothing is recycled).
+  - **R2:**
+    - undo always runs unelevated (rule in `docs/spec.md`);
+    - the source sweep now fails on any mention of the journal readers or `undo_move` outside
+      the move module, which also catches renamed imports.
+  - **N1:** when Windows reports nothing in the bin, the warning says it may have deleted the
+    item permanently, instead of "another file took its place".
+  - **Owner check:** while the dialog is open, the ByteBroom window must not respond to clicks
+    (the dialog runs on a worker thread; see the owner check steps).
 
 ## Design (proposed; the decisions below choose between options)
 
@@ -198,10 +212,14 @@ Each task: code → tests → fmt + clippy → full tests → build → commit w
 2. Scan, then tick **one** amber installer you don't need, with the action **Recycle Bin**.
 3. Preview, tick both confirms, press **Clean now**, then **don't click anything** for 10 seconds.
 4. Expected: Windows' dialog "ByteBroom: clean your own files?" is over the ByteBroom window and
-   stays there, and nothing is cleaned while you wait. Press **Cancel**: the page says nothing was
-   cleaned.
+   stays there, and nothing is cleaned while you wait. **Cancel** is the highlighted button. Try
+   clicking the ByteBroom window behind it: it should not respond. Press **Enter**: the page says
+   nothing was cleaned.
 5. Repeat and press **Clean them** after reading: the installer is in the Recycle Bin.
-6. Tell Claude. Claude reads `ByteBroom\bytebroom.log` in your local app data (two lines,
+6. Also run the opt-in Recycle Bin test (it recycles one 4 KB dummy file,
+   `bytebroom-test-….txt`, that you can delete from the bin afterwards):
+   `$env:BYTEBROOM_REAL_RECYCLE_BIN_TESTS = "1"; cargo test -p bytebroom-core --test recycle real_bin_recycles_one_dummy_file -- --ignored --nocapture`
+7. Tell Claude. Claude reads `ByteBroom\bytebroom.log` in your local app data (two lines,
    `Cancelled` and `Clean`, with how long the dialog was open).
 
 ## Risks

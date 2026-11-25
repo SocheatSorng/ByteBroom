@@ -7,7 +7,7 @@
 #![allow(unsafe_code)]
 
 pub mod dir;
-mod fileop;
+pub mod fileop;
 pub mod hash;
 mod layout;
 pub mod locations;

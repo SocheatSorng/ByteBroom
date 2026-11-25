@@ -209,12 +209,12 @@ fn recycle_refuses_a_swapped_file_before_the_shell_is_called() {
 }
 
 #[test]
-fn recycle_warns_when_the_checked_file_is_not_what_left() {
+fn recycle_warns_when_the_shell_reports_nothing_in_the_bin() {
     let r = Root::new("hid-bin-race");
     let seen = identity_of(&r.file("a.tmp"));
     let aside = r.file("aside.tmp");
-    // The "shell" finds the path gone because the checked file was renamed aside at the last
-    // moment: whatever the shell took, it was not the file that passed the checks.
+    // The path is gone but the "shell" reports no item in the bin (as when Windows deletes
+    // for good): a warning that says so (re-review N1), never a quiet success.
     let shell = |p: &WinPath| {
         fs::rename(format!("\\\\?\\{p}"), &aside).unwrap();
         Ok(None)
@@ -226,7 +226,7 @@ fn recycle_warns_when_the_checked_file_is_not_what_left() {
         out.warnings[0]
             .reason
             .to_string()
-            .contains("another file took its place"),
+            .contains("may have deleted this permanently"),
         "{:?}",
         out.warnings[0]
     );
@@ -400,4 +400,62 @@ fn the_log_is_renamed_only_inside_the_held_folder_and_only_if_plain() {
         b"precious"
     );
     assert!(held.replace_name("bytebroom.log", "..\\escape").is_err());
+}
+
+/// Re-review R1: the shell parses paths through its namespace, where a folder with a planted
+/// `desktop.ini` can be a "folder shortcut" to somewhere else. The item the shell would recycle
+/// must be exactly the checked path; a plain file is, a path through a folder shortcut is not.
+/// Nothing is recycled here: this only parses names.
+#[test]
+fn the_shell_item_must_be_exactly_the_checked_path() {
+    use bytebroom_core::win::fileop::shell_sees_exactly;
+    let r = Root::new("hid-shortcut");
+    assert!(shell_sees_exactly(&real(&r.file("a.tmp"))));
+
+    let sentinel = r.dir.0.join("sentinel");
+    write_file(&sentinel.join("keep.txt"), b"keep");
+    let shortcut = r.root.join("fs");
+    fs::create_dir_all(&shortcut).unwrap();
+    fs::write(
+        shortcut.join("desktop.ini"),
+        "[.ShellClassInfo]\r\nCLSID2={0AFACED1-E828-11D1-9187-B532F1E9575D}\r\nFlags=2\r\n",
+    )
+    .unwrap();
+    let script = format!(
+        "$s=(New-Object -ComObject WScript.Shell).CreateShortcut('{}'); $s.TargetPath='{}'; $s.Save()",
+        shortcut.join("target.lnk").display(),
+        sentinel.display()
+    );
+    let made = std::process::Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .status()
+        .unwrap();
+    assert!(made.success());
+    for args in [
+        vec![
+            "+s".to_string(),
+            "+h".into(),
+            shortcut.join("desktop.ini").display().to_string(),
+        ],
+        vec!["+r".to_string(), shortcut.display().to_string()],
+    ] {
+        assert!(
+            std::process::Command::new("attrib")
+                .args(&args)
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+    let through = WinPath::parse(&format!("{}\\keep.txt", real(&shortcut))).unwrap();
+    assert!(
+        !shell_sees_exactly(&through),
+        "a folder shortcut must not pass"
+    );
+    assert_eq!(fs::read(sentinel.join("keep.txt")).unwrap(), b"keep");
+    // Let the temp cleanup remove it.
+    std::process::Command::new("attrib")
+        .args(["-r", &shortcut.display().to_string()])
+        .status()
+        .unwrap();
 }

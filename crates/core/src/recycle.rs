@@ -262,14 +262,16 @@ fn recycle_one(
                 .as_ref()
                 .is_some_and(|w| !same_file_recycled(w, created.as_ref()))
             {
+                // No item reported means Windows put nothing in the bin: it deleted the item for
+                // good (re-review N1). Otherwise it recycled a different file.
+                let why = if created.is_none() {
+                    "Windows reported nothing in the Recycle Bin: it may have deleted this permanently instead of recycling it"
+                } else {
+                    "another file took its place just before it was recycled: check the Recycle Bin and restore what you did not mean to clean"
+                };
                 out.removed.push(real.clone());
-                out.warnings.push(skip(
-                    &real,
-                    SkipReason::Failed(
-                        "another file took its place just before it was recycled: check the Recycle Bin and restore what you did not mean to clean"
-                            .into(),
-                    ),
-                ));
+                out.warnings
+                    .push(skip(&real, SkipReason::Failed(why.into())));
                 return;
             }
             match (before, after) {

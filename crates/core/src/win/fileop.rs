@@ -16,8 +16,8 @@ use std::cell::{Cell, RefCell};
 use std::ffi::{OsStr, c_void};
 use std::os::windows::ffi::OsStrExt;
 use windows_sys::Win32::System::Com::{
-    CLSCTX_ALL, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoCreateInstance, CoInitializeEx,
-    CoTaskMemFree, CoUninitialize,
+    CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoCreateInstance,
+    CoInitializeEx, CoTaskMemFree, CoUninitialize,
 };
 use windows_sys::Win32::UI::Shell::{
     FOF_ALLOWUNDO, FOF_NO_UI, FOFX_RECYCLEONDELETE, FileOperation, SHCreateItemFromParsingName,
@@ -127,6 +127,38 @@ struct Sink {
     refs: Cell<u32>,
     /// The deleted item's HRESULT and where it went (`None`: deleted for good, or not reported).
     reported: RefCell<Option<(HRESULT, Option<String>)>>,
+    /// The path that was checked; any item the shell is about to delete must be exactly this.
+    expected: Option<WinPath>,
+    /// Set when `PreDeleteItem` stopped the shell.
+    refused: Cell<bool>,
+}
+
+/// Is the shell item's own file-system path exactly `expected`? The shell resolves names
+/// through its namespace (a folder made into a "folder shortcut" with `desktop.ini` can point
+/// elsewhere), so the item it would delete is compared with the checked path, never assumed
+/// (security re-review R1).
+///
+/// # Safety
+/// `item` must be a valid `IShellItem` pointer (or null).
+unsafe fn item_is(item: Raw, expected: Option<&WinPath>) -> bool {
+    // SAFETY: passed through from the caller.
+    let path = unsafe { item_path(item) };
+    match (path.and_then(|p| WinPath::parse(&p).ok()), expected) {
+        (Some(p), Some(e)) => p == *e,
+        _ => false,
+    }
+}
+
+unsafe extern "system" fn pre_delete(this: Raw, _flags: u32, item: Raw) -> HRESULT {
+    // SAFETY: `this` is our Sink; `item` is an IShellItem valid for this call.
+    let s = unsafe { &*this.cast::<Sink>() };
+    if unsafe { item_is(item, s.expected.as_ref()) } {
+        S_OK
+    } else {
+        // A failing result stops the shell before it deletes this item.
+        s.refused.set(true);
+        E_FAIL
+    }
 }
 
 unsafe extern "system" fn sink_qi(this: Raw, iid: *const GUID, out: *mut Raw) -> HRESULT {
@@ -188,9 +220,6 @@ unsafe extern "system" fn ok_post_move(
     _: HRESULT,
     _: Raw,
 ) -> HRESULT {
-    S_OK
-}
-unsafe extern "system" fn ok_pre_delete(_: Raw, _: u32, _: Raw) -> HRESULT {
     S_OK
 }
 unsafe extern "system" fn ok_post_new(
@@ -262,7 +291,7 @@ static SINK_VTBL: SinkVtbl = SinkVtbl {
     post_move_item: ok_post_move,
     pre_copy_item: ok_pre_move,
     post_copy_item: ok_post_move,
-    pre_delete_item: ok_pre_delete,
+    pre_delete_item: pre_delete,
     post_delete_item: post_delete,
     pre_new_item: ok_pre_rename,
     post_new_item: ok_post_new,
@@ -298,6 +327,49 @@ pub fn recycle_reporting(path: &WinPath) -> Result<Option<WinPath>, i32> {
         .map_err(|_| E_FAIL)?
 }
 
+/// Would the shell take `path` as exactly that file? Parses it through the shell namespace,
+/// the way [`recycle_reporting`] does, and compares the item's own file-system path; acts on
+/// nothing. (Re-review R1: a folder shortcut must not redirect the shell elsewhere.)
+pub fn shell_sees_exactly(path: &WinPath) -> bool {
+    let text = path.to_string();
+    let expected = path.clone();
+    std::thread::Builder::new()
+        .name("shell item".into())
+        .spawn(move || {
+            // SAFETY: plain COM initialisation of this new thread; undone below.
+            let init = unsafe {
+                CoInitializeEx(
+                    std::ptr::null(),
+                    (COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) as u32,
+                )
+            };
+            if init < 0 {
+                return false;
+            }
+            let wide: Vec<u16> = OsStr::new(&text).encode_wide().chain(Some(0)).collect();
+            let mut item: Raw = std::ptr::null_mut();
+            // SAFETY: `wide` is NUL-terminated; `item` is released below.
+            let hr = unsafe {
+                SHCreateItemFromParsingName(
+                    wide.as_ptr(),
+                    std::ptr::null_mut(),
+                    &IID_ISHELLITEM,
+                    &mut item,
+                )
+            };
+            // SAFETY: `item` is valid when `hr` succeeded; released once; COM undone last.
+            let same = hr >= 0 && unsafe { item_is(item, Some(&expected)) };
+            unsafe {
+                release(item);
+                CoUninitialize();
+            }
+            same
+        })
+        .ok()
+        .and_then(|t| t.join().ok())
+        .unwrap_or(false)
+}
+
 fn recycle_on_this_thread(path: &str) -> Result<Option<WinPath>, i32> {
     // SAFETY: plain COM initialisation of this new thread; undone below.
     let init = unsafe {
@@ -323,7 +395,7 @@ fn run_operation(path: &str) -> Result<Option<WinPath>, i32> {
         CoCreateInstance(
             &FileOperation,
             std::ptr::null_mut(),
-            CLSCTX_ALL,
+            CLSCTX_INPROC_SERVER,
             &IID_IFILEOPERATION,
             &mut op,
         )
@@ -346,10 +418,24 @@ fn run_operation(path: &str) -> Result<Option<WinPath>, i32> {
         unsafe { release(op) };
         return Err(hr);
     }
+    let expected = WinPath::parse(path).ok();
+    // The item the shell made must be exactly the checked path before anything is queued
+    // (re-review R1); the sink checks again just before the shell deletes.
+    // SAFETY: `item` is the valid IShellItem just created.
+    if !unsafe { item_is(item, expected.as_ref()) } {
+        // SAFETY: we own both.
+        unsafe {
+            release(item);
+            release(op);
+        }
+        return Err(E_FAIL);
+    }
     let sink = Box::new(Sink {
         vtbl: &SINK_VTBL,
         refs: Cell::new(1),
         reported: RefCell::new(None),
+        expected,
+        refused: Cell::new(false),
     });
     let sink_ptr = (&raw const *sink).cast_mut().cast::<c_void>();
     // SAFETY: `op` is a valid IFileOperation.
@@ -381,10 +467,14 @@ fn run_operation(path: &str) -> Result<Option<WinPath>, i32> {
         hr
     };
     let reported = sink.reported.borrow_mut().take();
+    let refused = sink.refused.get();
     if sink.refs.get() > 1 {
         // The shell still holds a reference it never gave back: keep the sink alive rather
         // than free memory it might still use.
         std::mem::forget(sink);
+    }
+    if refused {
+        return Err(E_FAIL);
     }
     if hr < 0 {
         return Err(hr);
