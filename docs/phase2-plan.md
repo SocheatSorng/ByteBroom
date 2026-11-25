@@ -156,6 +156,16 @@ Each task: code → tests → fmt + clippy → full tests → commit with a "why
   - Not needed now; if a real drive is too slow, merge the scan's two passes over the profile (the
     large-file and duplicate search, then the build-folder search) into one, before anything
     lower-level.
+  - **Owner's real scan (task 11): 780 s** for the profile plus D: and E: (VM disks and ISOs, 14.5 GB
+    of duplicate copies). Changes made:
+    - one walk for large files, duplicates and build folders, instead of two;
+    - duplicate hashing in parallel, one thread per drive, with 1 MiB reads;
+    - the tool prints the time of each step.
+  - Re-run of the speed test after the change: the full scan walked 200,000 files instead of
+    400,000. Its time (19.8 s) can't be compared with the first run, because the PC was much slower
+    that hour: generating the tree took 617 s against 389 s, and the walk alone 25.3 s against
+    12.4 s. The fake tree has no duplicates, so the parallel hashing shows only on a real drive.
+    The owner's re-run gives the real number.
 - [x] **9. Read-only scan tool**
   - Acceptance: `cargo run --release -p bytebroom-scan` prints the totals for each category and
     tier, the 20 largest findings and how many folders it could not read.

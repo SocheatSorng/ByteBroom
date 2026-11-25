@@ -31,8 +31,9 @@ Expected:
 - It starts with `Nothing on this PC is changed by this scan.`
 - "Looking in" lists your profile, AppData\Local and Downloads, and any other fixed drives. Any
   "Not scanned" line gives its reason.
-- It prints `Scanned in ... s.` Note the time: this is the real-drive speed (task 8 measured 18.9 s
-  for 200,000 files with a warm cache).
+- It prints `Scanned in ... s.` and then `Time by step:`, the steps that took a tenth of a second or
+  more. Note them: this is the real-drive speed (task 8 measured 18.9 s for 200,000 files with a
+  warm cache; the first real run, before the speed fixes, took 780 s).
 - It ends with `This list names your files. It was only printed here; ByteBroom saved it nowhere.`
 
 ## 4. Compare with Windows (read-only commands)
