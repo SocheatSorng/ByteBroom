@@ -191,5 +191,5 @@ above.
 
 - Phase 2: the large-file threshold and the installer age. Decided in `docs/phase2-plan.md`: 500 MB
   and 30 days.
-- Phase 4: which Windows tools free which red-tier items, and in what order (checked against Microsoft's
-  documentation before building).
+- Phase 4: which Windows tools free which red-tier items. Answered in `docs/phase4-plan.md`
+  task 0 (2026-11-25), each against Microsoft's documentation with links.
