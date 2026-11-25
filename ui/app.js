@@ -62,10 +62,30 @@
     preview: null,
   };
 
-  function setStatus(text, isError = false) {
+  /** Show a status line. `quiet` updates only the visible line (a scan's ticking seconds), so a
+   * screen reader hears each stage once instead of every half second. */
+  function setStatus(text, isError = false, quiet = false) {
     const s = $("status");
     s.textContent = text;
     s.classList.toggle("error", isError);
+    if (!quiet) $("announce").textContent = isError ? `Error: ${text}` : text;
+  }
+
+  // The lists are redrawn on every tick and scan update. Each control carries a data-focus key,
+  // so keyboard focus comes back to the same control on the redrawn list (WCAG 2.4.3).
+  function focusKey() {
+    const a = document.activeElement;
+    return a && a.dataset ? a.dataset.focus : undefined;
+  }
+
+  function refocus(k) {
+    if (!k) return;
+    for (const node of document.querySelectorAll("[data-focus]")) {
+      if (node.dataset.focus === k) {
+        node.focus({ preventScroll: true });
+        return;
+      }
+    }
   }
 
   function errorText(e) {
@@ -88,8 +108,13 @@
   }
 
   function setRunning(running) {
+    // A button that is disabled or hidden while focused drops keyboard focus to the page: hand it
+    // to the button that takes its place.
+    const from = document.activeElement;
     $("scan").disabled = running;
     $("cancel").hidden = !running;
+    if (running && from === $("scan")) $("cancel").focus();
+    if (!running && from === $("cancel")) $("scan").focus();
     $("progress").hidden = !running;
     $("preview").disabled = running || chosen().length === 0;
   }
@@ -113,6 +138,7 @@
 
   function apply(v) {
     const seconds = Math.round(v.elapsedMs / 1000);
+    const newStage = v.phase !== state.phase;
     if (v.findings) {
       if (v.scan !== state.scan) {
         state.choices = new Map();
@@ -141,7 +167,7 @@
       cancelled: `Stopped after ${seconds} s. Showing the ${found} found so far.`,
       idle: $("status").textContent,
     }[v.phase];
-    setStatus(text);
+    setStatus(text, false, !newStage);
     $("main").hidden = v.phase === "idle";
   }
 
@@ -174,6 +200,7 @@
   }
 
   function render() {
+    const focused = focusKey();
     for (const tier of ["green", "amber"]) {
       const box = $(`${tier}-list`);
       box.replaceChildren();
@@ -186,6 +213,7 @@
     }
     renderLargest();
     updateTotals();
+    refocus(focused);
   }
 
   function category(rule, group) {
@@ -197,7 +225,7 @@
       checked: offered.length > 0 && on === offered.length,
       indeterminate: on > 0 && on < offered.length,
       disabled: offered.length === 0,
-      attrs: { "aria-label": `Choose every item in ${group.label}` },
+      attrs: { "aria-label": `Choose every item in ${group.label}`, "data-focus": `cat:${rule}` },
       on: {
         click: (e) => e.stopPropagation(),
         change: (e) => {
@@ -212,7 +240,7 @@
       { className: "category", open: state.open.has(rule) },
       el(
         "summary",
-        {},
+        { attrs: { "data-focus": `sum:${rule}` } },
         box,
         el("span", { className: "cat-name", text: group.label }),
         el("span", { className: "cat-count", text: plural(visible.length, "item") }),
@@ -234,10 +262,17 @@
               type: "button",
               className: "link",
               text: `Show ${Math.min(ROWS_PER_PAGE, visible.length - limit)} more of ${plural(visible.length - limit, "item")}`,
+              attrs: { "data-focus": `more:${rule}` },
               on: {
                 click: () => {
                   state.shown.set(rule, limit + ROWS_PER_PAGE);
                   fill();
+                  // The button is redrawn: put focus on the first new row a key can reach.
+                  const next = [...rows.children]
+                    .slice(limit)
+                    .map((r) => r.querySelector("input:not(:disabled), select:not(:disabled), button"))
+                    .find(Boolean);
+                  if (next) next.focus();
                 },
               },
             }),
@@ -247,6 +282,11 @@
     };
     if (details.open) fill();
     details.addEventListener("toggle", () => {
+      // A list drawn already open fires a toggle of its own a moment later. Its rows are already
+      // drawn: refilling them would drop keyboard focus from the row just ticked, and if two
+      // redraws came first, redrawing for a list that is gone would set off the next one's,
+      // endlessly. A toggle that changes nothing is that one: ignore it.
+      if (details.open === state.open.has(rule)) return;
       if (details.open) state.open.add(rule);
       else state.open.delete(rule);
       // The list may have been redrawn (a scan update) between the click and this event: then
@@ -265,11 +305,24 @@
     const c = state.choices.get(key(f.id));
     const off = Boolean(f.notOffered);
     const label = f.name || f.path;
+    // The tick also reads out the full path and any tag (why it can't be chosen, a warning), so
+    // rows with the same name can be told apart without colour or position.
+    const uid = `${f.id.scan}-${f.id.index}`;
+    const tags = [];
+    if (f.notOffered) tags.push(el("span", { className: "tag off", text: f.notOffered }));
+    if (f.note) tags.push(el("span", { className: "tag", text: f.note }));
+    if (f.duplicateOf) {
+      tags.push(el("span", { className: "tag off", text: `copy of ${f.duplicateOf}` }));
+    }
+    tags.forEach((t, i) => {
+      t.id = `tag-${uid}-${i}`;
+    });
+    const described = [`path-${uid}`, ...tags.map((t) => t.id)].join(" ");
     const tick = el("input", {
       type: "checkbox",
       checked: c.on && !off,
       disabled: off,
-      attrs: { "aria-label": `Choose ${label}` },
+      attrs: { "aria-label": `Choose ${label}`, "aria-describedby": described, "data-focus": `tick:${key(f.id)}` },
       on: {
         change: (e) => {
           c.on = e.target.checked;
@@ -281,7 +334,7 @@
       "select",
       {
         disabled: off,
-        attrs: { "aria-label": `Action for ${label}` },
+        attrs: { "aria-label": `Action for ${label}`, "data-focus": `act:${key(f.id)}` },
         on: {
           change: (e) => {
             c.action = e.target.value;
@@ -290,12 +343,6 @@
       },
       ...ACTIONS.map(([value, text]) => el("option", { value, text, selected: c.action === value })),
     );
-    const tags = [];
-    if (f.notOffered) tags.push(el("span", { className: "tag off", text: f.notOffered }));
-    if (f.note) tags.push(el("span", { className: "tag", text: f.note }));
-    if (f.duplicateOf) {
-      tags.push(el("span", { className: "tag off", text: `copy of ${f.duplicateOf}` }));
-    }
     return el(
       "div",
       { className: off ? "row off" : "row" },
@@ -307,7 +354,7 @@
           className: "item-name",
           text: f.isFolder ? `${label} (folder, ${plural(f.files, "file")})` : label,
         }),
-        el("span", { className: "item-path", text: f.path, title: f.path }),
+        el("span", { className: "item-path", id: `path-${uid}`, text: f.path, title: f.path }),
         ...tags,
       ),
       el("span", { className: "size", text: bytes(f.bytes) }),
@@ -561,7 +608,13 @@
   $("open-bin").addEventListener("click", () =>
     invoke("open_recycle_bin").catch((e) => setStatus(errorText(e), true)),
   );
+  // When a dialog closes, keyboard focus goes back to the button that leads on (WCAG 2.4.3),
+  // not to the top of the page. Focus only: what closing does is unchanged.
+  $("preview-dialog").addEventListener("close", () => {
+    if (!$("preview").disabled) $("preview").focus();
+  });
   $("result-dialog").addEventListener("close", () => {
+    $("scan").focus();
     if ($("result-dialog").returnValue === "scan") startScan();
   });
   let filterTimer = 0;

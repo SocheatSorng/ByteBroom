@@ -19,9 +19,11 @@
       </div>
     </header>
 
-    <p id="status" class="status" role="status" aria-live="polite">
+    <p id="status" class="status">
       Press Scan to see what can be cleaned. Nothing is changed until you preview and confirm.
     </p>
+    <!-- Screen readers hear a status once when it changes stage, not every second of a scan. -->
+    <p id="announce" class="visually-hidden" role="status" aria-live="polite"></p>
     <div id="progress" class="progress" hidden>
       <div class="progress-bar" aria-hidden="true"></div>
     </div>
@@ -78,7 +80,7 @@
 
     <dialog id="preview-dialog" aria-labelledby="preview-h">
       <form method="dialog" class="dialog-body">
-        <h2 id="preview-h">Preview: what will happen</h2>
+        <h2 id="preview-h" tabindex="-1" autofocus>Preview: what will happen</h2>
         <div id="preview-content"></div>
         <div class="dialog-actions">
           <button value="cancel" type="submit">Back</button>
@@ -89,7 +91,7 @@
 
     <dialog id="result-dialog" aria-labelledby="result-h">
       <form method="dialog" class="dialog-body">
-        <h2 id="result-h">Done</h2>
+        <h2 id="result-h" tabindex="-1" autofocus>Done</h2>
         <div id="result-content"></div>
         <div class="dialog-actions">
           <button id="open-bin" type="button" hidden>Open Recycle Bin</button>

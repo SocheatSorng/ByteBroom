@@ -5,6 +5,8 @@
   --text: #1b1f23;
   --muted: #5b6570;
   --line: #d9dee3;
+  /* Edges of text fields and drop-downs: at least 3:1 against panel and page (WCAG 1.4.11). */
+  --control-edge: #7b8590;
   --accent: #165e78;
   --accent-text: #ffffff;
   --focus: #0b74c4;
@@ -28,6 +30,7 @@
     --text: #e8eaed;
     --muted: #a3acb5;
     --line: #353b41;
+    --control-edge: #727c86;
     --accent: #4fb3d4;
     --accent-text: #0b1a20;
     --focus: #7cc7ff;
@@ -126,6 +129,18 @@ button.link {
   outline-offset: 2px;
 }
 
+/* Keep a focused item clear of the sticky toolbar when Tab or Shift+Tab scrolls to it (WCAG
+   2.4.11). The toolbar is about 120px tall when it wraps at the smallest window. */
+html {
+  scroll-padding-top: 140px;
+}
+
+/* Dialog headings take focus when a dialog opens, so its summary is read first; they are not
+   controls, so they show no ring. */
+h2[tabindex="-1"]:focus {
+  outline: none;
+}
+
 .bar {
   display: flex;
   align-items: center;
@@ -182,6 +197,10 @@ button.link {
     width: 100%;
     opacity: 0.6;
   }
+
+  .cat-name::before {
+    transition: none;
+  }
 }
 
 main {
@@ -222,7 +241,7 @@ main {
   flex: 1;
   min-width: 120px;
   padding: 6px 10px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--control-edge);
   border-radius: 6px;
   background: var(--panel);
 }
@@ -407,7 +426,7 @@ details[open] > summary .cat-name::before {
 select {
   width: 100%;
   padding: 3px 4px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--control-edge);
   border-radius: 5px;
   background: var(--panel);
 }
