@@ -186,9 +186,10 @@ pub const BUILD_FOLDERS: [BuildFolder; 5] = [
 
 /// Folders that are never listed, wherever they are (matched ignoring ASCII case).
 pub const NEVER_LISTED_FOLDERS: [&str; 2] = [".ssh", ".gnupg"];
-/// File names that are never listed: wallets and the browser files that hold logins, cookies,
-/// history and settings. Their SQLite `-journal` companions are covered too.
-pub const NEVER_LISTED_NAMES: [&str; 8] = [
+/// File names that are never listed: wallets, the browser files that hold logins, cookies,
+/// history and settings (Chromium and Firefox), and SSH keys kept outside `.ssh`. Their SQLite
+/// `-journal`, `-wal` and `-shm` companions are covered too.
+pub const NEVER_LISTED_NAMES: [&str; 15] = [
     "wallet.dat",
     "Cookies",
     "Login Data",
@@ -197,19 +198,43 @@ pub const NEVER_LISTED_NAMES: [&str; 8] = [
     "History",
     "Bookmarks",
     "Local State",
+    "logins.json",
+    "key4.db",
+    "cert9.db",
+    "cookies.sqlite",
+    "places.sqlite",
+    "id_rsa",
+    "id_ed25519",
 ];
 /// Extensions that are never listed: password vaults, certificates and keys.
-pub const NEVER_LISTED_EXTENSIONS: [&str; 7] =
-    ["kdbx", "1pif", "agilekeychain", "pfx", "p12", "pem", "key"];
+pub const NEVER_LISTED_EXTENSIONS: [&str; 11] = [
+    "kdbx",
+    "kdb",
+    "psafe3",
+    "1pif",
+    "agilekeychain",
+    "gpg",
+    "pfx",
+    "p12",
+    "pem",
+    "key",
+    "ppk",
+];
+
+/// SQLite companion files that hold the same data as the database they sit next to.
+const SQLITE_COMPANIONS: [&str; 3] = ["-journal", "-wal", "-shm"];
 
 /// True when an item with this name must never appear in any finding (files and folders alike).
 pub fn is_never_listed(name: &str) -> bool {
-    let bare = name.strip_suffix("-journal").unwrap_or(name);
+    let bare = SQLITE_COMPANIONS
+        .iter()
+        .find_map(|s| name.strip_suffix(s))
+        .unwrap_or(name);
     NEVER_LISTED_FOLDERS
         .iter()
         .chain(NEVER_LISTED_NAMES.iter())
         .any(|n| bare.eq_ignore_ascii_case(n))
-        || name.rsplit_once('.').is_some_and(|(stem, ext)| {
+        || bare.rsplit_once('.').is_some_and(|(stem, ext)| {
             !stem.is_empty()
                 && NEVER_LISTED_EXTENSIONS
                     .iter()
@@ -689,8 +714,37 @@ mod tests {
             "me.p12",
             "server.pem",
             "private.key",
+            "logins.json",
+            "KEY4.DB",
+            "cert9.db",
+            "cookies.sqlite-wal",
+            "places.sqlite-shm",
+            "places.sqlite",
+            "id_rsa",
+            "id_ed25519",
+            "work.ppk",
+            "old.kdb",
+            "pw.psafe3",
+            "secrets.tar.gpg",
         ] {
             assert!(is_never_listed(name), "{name}");
+        }
+        // Every entry of every list, in any case and with every SQLite companion.
+        let all = NEVER_LISTED_FOLDERS
+            .iter()
+            .chain(NEVER_LISTED_NAMES.iter())
+            .map(|n| n.to_string())
+            .chain(NEVER_LISTED_EXTENSIONS.iter().map(|e| format!("x.{e}")));
+        for name in all {
+            for variant in [
+                name.clone(),
+                name.to_uppercase(),
+                format!("{name}-journal"),
+                format!("{name}-wal"),
+                format!("{name}-shm"),
+            ] {
+                assert!(is_never_listed(&variant), "{variant}");
+            }
         }
         for name in [
             "Cache",
@@ -702,6 +756,10 @@ mod tests {
             "setup.exe",
             "thumbcache_256.db",
             "data_0",
+            "id_rsa.pub.txt",
+            "places.sqlite.bak",
+            "gpg",
+            "logins",
         ] {
             assert!(!is_never_listed(name), "{name}");
         }

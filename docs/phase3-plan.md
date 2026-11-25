@@ -98,7 +98,7 @@ Defaults this plan uses unless the owner says otherwise:
 
 Each task: code → tests → fmt + clippy → full tests → commit with a "why" message.
 
-- [ ] **0. Never-listed additions (decision 3)**
+- [x] **0. Never-listed additions (decision 3)**
   - Acceptance: the new names and extensions are in `rules.rs` and in the README list (docs-drift);
     the walker never lists them and the engine never acts on them.
   - Tests: the existing never-listed tests (rules, walker, engine) cover every new entry.

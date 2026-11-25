@@ -60,6 +60,9 @@ impl Tree {
         write_file(&root.join("Login Data"), &[6u8; 800]);
         write_file(&root.join("vault.kdbx"), &[7u8; 900]);
         write_file(&root.join("sub").join("Cookies-journal"), &[8u8; 100]);
+        for name in never_listed_files() {
+            write_file(&root.join("more").join(name), &[8u8; 10]);
+        }
         fs::write(
             format!("\\\\?\\{}\\odd.", root.display()),
             [0u8; 10].as_slice(),
@@ -226,9 +229,21 @@ fn never_lists_keys_vaults_or_browser_logins() {
         for bad in [".ssh", "id_rsa", "login data", "kdbx", "cookies"] {
             assert!(!lower.contains(bad), "{k} was listed");
         }
+        assert!(!k.starts_with("more\\"), "{k} was listed");
     }
-    // .ssh (not entered, so id_rsa is never seen), Login Data, vault.kdbx, Cookies-journal.
-    assert_eq!(s.protected_skipped, 4);
+    // .ssh (not entered, so id_rsa is never seen), Login Data, vault.kdbx, Cookies-journal,
+    // and one file per entry of the never-listed lists in `more\`.
+    assert_eq!(s.protected_skipped, 4 + never_listed_files().len() as u64);
+}
+
+/// One file name for every entry of the never-listed name and extension lists.
+fn never_listed_files() -> Vec<String> {
+    use bytebroom_core::rules::{NEVER_LISTED_EXTENSIONS, NEVER_LISTED_NAMES};
+    NEVER_LISTED_NAMES
+        .iter()
+        .map(|n| n.to_string())
+        .chain(NEVER_LISTED_EXTENSIONS.iter().map(|e| format!("x.{e}")))
+        .collect()
 }
 
 #[test]

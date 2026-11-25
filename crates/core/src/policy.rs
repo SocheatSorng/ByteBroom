@@ -453,7 +453,21 @@ mod tests {
             ".ssh\\id_rsa",
             "wallet.dat",
             "keys.agilekeychain\\data",
-        ] {
+        ]
+        .into_iter()
+        .map(String::from)
+        // Every entry of every list (the phase 3 additions included).
+        .chain(
+            crate::rules::NEVER_LISTED_FOLDERS
+                .iter()
+                .chain(crate::rules::NEVER_LISTED_NAMES.iter())
+                .map(|n| n.to_string()),
+        )
+        .chain(
+            crate::rules::NEVER_LISTED_EXTENSIONS
+                .iter()
+                .map(|e| format!("x.{e}")),
+        ) {
             let path = format!("{t}\\{bad}");
             assert_eq!(
                 pol.check_target(&resolved(&path)),

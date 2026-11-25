@@ -41,9 +41,11 @@ you. Red items are shown with their sizes only; ByteBroom never deletes them as 
 | Red | Restore points |
 
 Never listed at all, wherever they are: `.ssh`, `.gnupg`, `wallet.dat`, `Cookies`, `Login Data`,
-`Login Data For Account`, `Web Data`, `History`, `Bookmarks`, `Local State`, and files ending in
-`.kdbx`, `.1pif`, `.agilekeychain`, `.pfx`, `.p12`, `.pem` or `.key`. Links and junctions are never
-followed.
+`Login Data For Account`, `Web Data`, `History`, `Bookmarks`, `Local State`, Firefox's `logins.json`,
+`key4.db`, `cert9.db`, `cookies.sqlite` and `places.sqlite`, SSH keys named `id_rsa` or `id_ed25519`,
+and files ending in `.kdbx`, `.kdb`, `.psafe3`, `.1pif`, `.agilekeychain`, `.gpg`, `.pfx`, `.p12`,
+`.pem`, `.key` or `.ppk`. Their SQLite companions (the same name ending in -journal, -wal or
+-shm) are never listed either. Links and junctions are never followed.
 
 ## Install, run, test, build
 
