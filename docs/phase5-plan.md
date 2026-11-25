@@ -158,6 +158,16 @@ Each task: code → tests → fmt + clippy → full tests → build → commit w
 - **Task 7, UI pass** (`393dbf2`): buttons stay in view at 720x520, results are announced from
   the dialog's own live region, focus goes to the next Put back button, long names wrap.
 - Checks: `./check.ps1` passes (322 tests), and `./build.ps1` builds both binaries.
-- **Open:** the owner's check (`docs/phase5-owner-check.md`), then the merge on the owner's yes.
+- **Owner's check, 2026-11-25: passed.**
+  - The move to another drive, the History, the put-back (the same SHA-256 before and after), the
+    recycled item in Windows' Recycle Bin and clear history all worked as written. A finished
+    clean read "all put back".
+  - Claude's read-only check: `move-me.bin` is back at 629,145,600 bytes and gone from the other
+    drive, and both journals are empty after the clear (recreated when the History reread them).
+  - The History also listed an older move from before phase 5 (a `bytebroom-move-v1` line, shown
+    as a clean of its own, as designed). Clearing removed that record too; the file itself is
+    still where it was moved. Lesson: an owner check that clears the history should say that it
+    forgets every earlier move, not only the test's.
+- **Open:** the merge, on the owner's yes.
 - Known limit: a file can't be put back directly into a profile folder or a drive root (never a
   policy root); the window says so and the owner moves it by hand.
