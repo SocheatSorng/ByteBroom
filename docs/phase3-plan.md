@@ -181,7 +181,7 @@ Each task: code → tests → fmt + clippy → full tests → commit with a "why
       that deletes or copies (Recycle goes through the shell by path: document what is left).
     - note 7: the move journal's folder is opened following links; open it no-follow, or keep it
       in an admin-owned folder.
-- [ ] **9. Accessibility pass**
+- [x] **9. Accessibility pass**
   - `agent-skills:accessibility-auditor` checks the window (keyboard, contrast, labels) through the
     harness; must-fixes are fixed.
 - [ ] **10. Owner check**
