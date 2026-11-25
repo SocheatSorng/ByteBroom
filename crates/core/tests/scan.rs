@@ -519,6 +519,33 @@ fn a_temp_item_with_an_unreadable_part_is_not_offered() {
     assert!(found.contains(&format!("{L}Temp\\olddir")));
 }
 
+/// The scan reports how long each step took: the shared search walk once (large files,
+/// duplicates and build folders walk the drives together), then every green and amber rule.
+#[test]
+fn the_scan_times_each_step_and_walks_the_search_areas_once() {
+    let p = Profile::new();
+    let opts = ScanOptions {
+        now: SystemTime::now() + 2 * DAY,
+        cancel: None,
+    };
+    let report = scan(&p.locations(), &p.layout(), &opts);
+    let steps: Vec<&str> = report.steps.iter().map(|s| s.step).collect();
+    assert_eq!(
+        steps
+            .iter()
+            .filter(|s| **s == bytebroom_core::scan::SEARCH_WALK_STEP)
+            .count(),
+        1,
+        "{steps:?}"
+    );
+    let rules: Vec<&str> = bytebroom_core::rules::RULES
+        .iter()
+        .filter(|r| r.tier != Tier::Red)
+        .map(|r| r.label)
+        .collect();
+    assert_eq!(steps[1..].to_vec(), rules);
+}
+
 #[test]
 fn missing_locations_give_no_findings_and_cancel_stops() {
     let p = Profile::new();

@@ -57,6 +57,10 @@ fn main() {
     let report = scan(&at, &layout, &opts);
     let red = red_sizes(&at, &layout, &WalkOptions::default());
     println!("Scanned in {:.1} s.", started.elapsed().as_secs_f64());
+    println!("Time by step:");
+    for step in report.steps.iter().filter(|s| s.took.as_millis() >= 100) {
+        println!("  {:>7.1} s  {}", step.took.as_secs_f64(), step.step);
+    }
     println!();
 
     let summary = summarize(&report.findings, LARGEST);

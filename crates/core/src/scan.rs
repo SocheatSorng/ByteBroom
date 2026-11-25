@@ -19,7 +19,7 @@ use crate::locations::Locations;
 use crate::paths::WinPath;
 use crate::policy::{SystemLayout, denied_reason};
 use crate::rules::{
-    BUILD_FOLDER_NAMES, Base, BuildFolder, DUPLICATE_HEAD_BYTES, DUPLICATE_MIN_BYTES, Find,
+    BUILD_FOLDER_NAMES, BUILD_FOLDERS, Base, DUPLICATE_HEAD_BYTES, DUPLICATE_MIN_BYTES, Find,
     LARGE_FILE_BYTES, Look, OLD_INSTALLER_DAYS, Place, RULES, Rule, Tier, base_folder,
     name_matches,
 };
@@ -27,10 +27,10 @@ use crate::walk::{Item, Step, WalkOptions, WalkSummary};
 use crate::win::hash::Sha256;
 use crate::win::walk::walk;
 use crate::win::{Access, open_no_follow};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::Read;
 use std::sync::atomic::AtomicBool;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// Settings for one scan.
 #[derive(Debug, Clone, Copy)]
@@ -77,7 +77,21 @@ pub struct ScanReport {
     pub walked: WalkSummary,
     /// The scan stopped early.
     pub cancelled: bool,
+    /// How long each step took, in order (for the owner and for speed work; no names).
+    pub steps: Vec<StepTime>,
 }
+
+/// How long one step of a scan took.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StepTime {
+    /// The step: a rule's label, or the shared search walk.
+    pub step: &'static str,
+    /// Its wall-clock time.
+    pub took: Duration,
+}
+
+/// The name of the shared walk in [`ScanReport::steps`].
+pub const SEARCH_WALK_STEP: &str = "Search walk (large files, duplicates, build folders)";
 
 /// Sizes added up for one item.
 #[derive(Debug, Clone, Copy)]
@@ -157,8 +171,17 @@ struct Scanner<'a> {
     opts: WalkOptions<'a>,
     now: SystemTime,
     report: ScanReport,
-    /// Files from the shared large-file and duplicate search, once it has run.
-    search: Option<Vec<SearchFile>>,
+    /// What the shared search walk found, once it has run.
+    search: Option<Search>,
+}
+
+/// What the one walk of the search areas found, for the three rules that search.
+#[derive(Debug, Clone, Default)]
+struct Search {
+    /// Files large enough for the large-file or duplicate rule.
+    files: Vec<SearchFile>,
+    /// Build folders beside their project: (the folder, its project, its own date).
+    build_folders: Vec<(WinPath, WinPath, SystemTime)>,
 }
 
 /// A file the large-file and duplicate search kept.
@@ -412,69 +435,81 @@ impl Scanner<'_> {
         }
     }
 
-    fn build_folders(&mut self, rule: &'static Rule, areas: &[Base], kinds: &[BuildFolder]) {
-        for area in self.area_roots(areas) {
-            let Some(area) = self.search_root(&area) else {
-                continue;
-            };
-            let mut hits = Vec::new();
-            let layout = self.layout;
-            self.walk(&area, None, |item| {
-                let Item::Folder { path, modified, .. } = item else {
-                    return Step::Enter;
-                };
-                let Some(name) = path.parts().last() else {
-                    return Step::Enter;
-                };
-                if name.eq_ignore_ascii_case(".git") {
-                    return Step::Skip; // nothing to find inside, and often large
-                }
-                if let Some(kind) = kinds.iter().find(|k| k.name.eq_ignore_ascii_case(name))
-                    && let Some(project) = parent(path)
-                    && has_git(&project, layout)
-                    && has_marker(&project, kind.markers)
-                {
-                    hits.push(((*path).clone(), project, *modified));
-                    return Step::Skip;
-                }
-                Step::Enter
-            });
-            for (path, project, modified) in hits {
-                if self.stopped() {
-                    return;
-                }
-                let t = self.tally_folder(&path, modified);
-                self.push(rule, &project, path, &t);
+    fn build_folders(&mut self, rule: &'static Rule) {
+        for (path, project, modified) in self.search().build_folders {
+            if self.stopped() {
+                return;
             }
+            let t = self.tally_folder(&path, modified);
+            self.push(rule, &project, path, &t);
         }
     }
 
-    /// One walk for large files and duplicates (both rules search the same areas). Keeps only
-    /// files either rule can use; hard-link repeats are left out, so one file is one item.
-    fn search_files(&mut self, areas: &[Base]) -> Vec<SearchFile> {
+    /// The areas every search rule (other than old installers, which only look in Downloads)
+    /// covers, so one walk serves them all.
+    fn search_areas() -> Vec<Base> {
+        let mut areas = Vec::new();
+        for rule in RULES.iter() {
+            if let Look::Search { areas: a, find } = rule.look
+                && !matches!(find, Find::OldInstallers(_))
+            {
+                for base in a {
+                    if !areas.contains(base) {
+                        areas.push(*base);
+                    }
+                }
+            }
+        }
+        areas
+    }
+
+    /// One walk of the search areas for large files, duplicates and build folders: walking big
+    /// drives is mostly seek time, so walking them once instead of twice matters. Keeps only what
+    /// those rules can use; hard-link repeats are left out, so one file is one item.
+    ///
+    /// The walk never enters `AppData` (app disk images and databases), `.git` (repository data,
+    /// often large) or a build folder it has found (offered as one item; its contents would only
+    /// repeat it).
+    fn search(&mut self) -> Search {
         if let Some(found) = &self.search {
             return found.clone();
         }
-        let mut found = Vec::new();
-        for area in self.area_roots(areas) {
+        let started = Instant::now();
+        let mut found = Search::default();
+        let layout = self.layout;
+        for area in self.area_roots(&Self::search_areas()) {
             let Some(area) = self.search_root(&area) else {
                 continue;
             };
+            let build_folders = &mut found.build_folders;
+            let files = &mut found.files;
             self.walk(&area, None, |item| {
                 let f = match item {
-                    // App data (any profile's, on any drive) holds disk images and databases
-                    // whose apps break without them (WSL's ext4.vhdx, Docker's data). Their
-                    // caches are offered by the green and amber rules instead.
-                    Item::Folder { path, .. }
-                        if path
-                            .parts()
-                            .last()
-                            .is_some_and(|n| n.eq_ignore_ascii_case("AppData")) =>
-                    {
-                        return Step::Skip;
+                    Item::Folder { path, modified, .. } => {
+                        let Some(name) = path.parts().last() else {
+                            return Step::Enter;
+                        };
+                        // App data (any profile's, on any drive) holds disk images and databases
+                        // whose apps break without them (WSL's ext4.vhdx, Docker's data). Their
+                        // caches are offered by the green and amber rules instead.
+                        if name.eq_ignore_ascii_case("AppData") || name.eq_ignore_ascii_case(".git")
+                        {
+                            return Step::Skip;
+                        }
+                        if let Some(kind) = BUILD_FOLDERS
+                            .iter()
+                            .find(|k| k.name.eq_ignore_ascii_case(name))
+                            && let Some(project) = parent(path)
+                            && has_git(&project, layout)
+                            && has_marker(&project, kind.markers)
+                        {
+                            build_folders.push(((*path).clone(), project, *modified));
+                            return Step::Skip;
+                        }
+                        return Step::Enter;
                     }
                     Item::File(f) => f,
-                    _ => return Step::Enter,
+                    Item::Incomplete { .. } => return Step::Enter,
                 };
                 // A cloud placeholder's bytes may not be on this disk, and the engine never acts
                 // on placeholders (they are reparse points): not offered as a large file.
@@ -482,7 +517,7 @@ impl Scanner<'_> {
                 let duplicate_candidate =
                     f.len >= DUPLICATE_MIN_BYTES && !f.cloud && !in_build_or_git_folder(&f.path);
                 if !f.repeat && (large || duplicate_candidate) {
-                    found.push(SearchFile {
+                    files.push(SearchFile {
                         path: f.path.clone(),
                         len: f.len,
                         modified: f.modified,
@@ -493,6 +528,10 @@ impl Scanner<'_> {
                 Step::Enter
             });
         }
+        self.report.steps.push(StepTime {
+            step: SEARCH_WALK_STEP,
+            took: started.elapsed(),
+        });
         self.search = Some(found.clone());
         found
     }
@@ -507,8 +546,8 @@ impl Scanner<'_> {
         }
     }
 
-    fn large_files(&mut self, rule: &'static Rule, areas: &[Base]) {
-        for f in self.search_files(areas) {
+    fn large_files(&mut self, rule: &'static Rule) {
+        for f in self.search().files {
             if f.len >= LARGE_FILE_BYTES {
                 let mut t = Tally::new(false, f.modified);
                 t.add_file(f.len, f.modified, false, f.cloud);
@@ -517,9 +556,10 @@ impl Scanner<'_> {
         }
     }
 
-    fn duplicates(&mut self, rule: &'static Rule, areas: &[Base]) {
+    fn duplicates(&mut self, rule: &'static Rule) {
         let candidates: Vec<Candidate> = self
-            .search_files(areas)
+            .search()
+            .files
             .into_iter()
             .filter(|f| f.duplicate_candidate)
             .map(|f| Candidate {
@@ -529,14 +569,35 @@ impl Scanner<'_> {
             })
             .collect();
         let opts = self.opts;
+        // Hash ahead, in parallel per drive: first the heads of files that share a size, then
+        // the whole of files that share a size and a head. `find_duplicates` then groups exactly
+        // as before, reading the hashes from these maps.
+        let mut by_size: HashMap<u64, Vec<&Candidate>> = HashMap::new();
+        for c in &candidates {
+            by_size.entry(c.len).or_default().push(c);
+        }
+        let need_head: Vec<&Candidate> = by_size
+            .into_values()
+            .filter(|g| g.len() > 1)
+            .flatten()
+            .collect();
+        let heads = hash_all(&need_head, Some(DUPLICATE_HEAD_BYTES), &opts);
+        let mut by_head: HashMap<(u64, &String), Vec<&Candidate>> = HashMap::new();
+        for c in &need_head {
+            if let Some(h) = heads.get(&c.path) {
+                by_head.entry((c.len, h)).or_default().push(c);
+            }
+        }
+        let need_full: Vec<&Candidate> = by_head
+            .into_values()
+            .filter(|g| g.len() > 1)
+            .flatten()
+            .collect();
+        let fulls = hash_all(&need_full, None, &opts);
         let extras = find_duplicates(
-            candidates,
-            |c| {
-                (!opts.cancelled())
-                    .then(|| hash_file(c, Some(DUPLICATE_HEAD_BYTES)))
-                    .flatten()
-            },
-            |c| (!opts.cancelled()).then(|| hash_file(c, None)).flatten(),
+            candidates.clone(),
+            |c| heads.get(&c.path).cloned(),
+            |c| fulls.get(&c.path).cloned(),
         );
         if opts.cancelled() {
             self.report.cancelled = true;
@@ -561,18 +622,19 @@ impl Scanner<'_> {
                 areas,
                 find: Find::OldInstallers(exts),
             } => self.old_installers(rule, areas, exts),
+            // These three share one walk of the same areas (see `search`).
             Look::Search {
-                areas,
-                find: Find::BuildFolders(names),
-            } => self.build_folders(rule, areas, names),
+                find: Find::BuildFolders(_),
+                ..
+            } => self.build_folders(rule),
             Look::Search {
-                areas,
                 find: Find::LargeFiles,
-            } => self.large_files(rule, areas),
+                ..
+            } => self.large_files(rule),
             Look::Search {
-                areas,
                 find: Find::Duplicates,
-            } => self.duplicates(rule, areas),
+                ..
+            } => self.duplicates(rule),
             // Task 6.
             Look::SizeOnly(_) => {}
         }
@@ -611,7 +673,8 @@ fn hash_file(c: &Candidate, limit: Option<usize>) -> Option<String> {
     }
     let mut reader = opened.reader().ok()?;
     let mut sha = Sha256::new()?;
-    let mut buf = vec![0u8; 256 * 1024];
+    // Large reads: duplicate candidates are big files, often on spinning disks.
+    let mut buf = vec![0u8; 1024 * 1024];
     let mut left = limit.unwrap_or(usize::MAX);
     while left > 0 {
         let want = buf.len().min(left);
@@ -625,6 +688,50 @@ fn hash_file(c: &Candidate, limit: Option<usize>) -> Option<String> {
         left -= n;
     }
     sha.finish_hex()
+}
+
+/// Hash each candidate (`limit` bytes from the start, or all of it), one thread per drive: drives
+/// are separate disks, so reading them at the same time is close to free, while two readers on
+/// one spinning disk would only fight over the head. A file that can't be hashed (locked, changed)
+/// is left out. Stops early when the scan is cancelled.
+fn hash_all(
+    candidates: &[&Candidate],
+    limit: Option<usize>,
+    opts: &WalkOptions,
+) -> HashMap<WinPath, String> {
+    let mut by_drive: BTreeMap<char, Vec<&Candidate>> = BTreeMap::new();
+    for c in candidates {
+        by_drive.entry(c.path.drive()).or_default().push(c);
+    }
+    let cancel = opts.cancel;
+    let cancelled = || cancel.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed));
+    let mut out = HashMap::new();
+    std::thread::scope(|scope| {
+        let workers: Vec<_> = by_drive
+            .into_values()
+            .map(|files| {
+                scope.spawn(move || {
+                    let mut done = Vec::with_capacity(files.len());
+                    for c in files {
+                        if cancelled() {
+                            break;
+                        }
+                        if let Some(h) = hash_file(c, limit) {
+                            done.push((c.path.clone(), h));
+                        }
+                    }
+                    done
+                })
+            })
+            .collect();
+        for worker in workers {
+            // A worker that panicked hashed nothing usable; its files simply drop out.
+            if let Ok(done) = worker.join() {
+                out.extend(done);
+            }
+        }
+    });
+    out
 }
 
 /// `project` holds a real `.git` (a folder, or the file a worktree or submodule uses).
@@ -657,12 +764,21 @@ pub fn scan(at: &Locations, layout: &SystemLayout, opts: &ScanOptions) -> ScanRe
         report: ScanReport::default(),
         search: None,
     };
+    // The shared walk first, timed on its own, so each rule's time below is its own work.
+    s.search();
     for rule in RULES.iter() {
         if s.stopped() {
             s.report.cancelled = true;
             break;
         }
+        let started = Instant::now();
         s.run(rule);
+        if rule.tier != Tier::Red {
+            s.report.steps.push(StepTime {
+                step: rule.label,
+                took: started.elapsed(),
+            });
+        }
     }
     if s.stopped() {
         s.report.cancelled = true;
