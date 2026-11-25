@@ -139,4 +139,25 @@ Each task: code → tests → fmt + clippy → full tests → build → commit w
 
 ## Results
 
-(to be filled in)
+2026-11-25, on `phase-5-undo-history` (cut from `main` after the owner merged phase 4):
+
+- **Tasks 0-3** (`9f0ccb4`): moves are written as `bytebroom-move-v2` (clean number first); a
+  put-back is `bytebroom-undone-v1`; v1 lines still read. `undo_entries` re-reads the journal per
+  file. `undo_move` remakes a moved folder's missing folders, only inside the roots. Recycling
+  records the bin item the shell reported in `recycled.journal`.
+- **Tasks 4-5** (`dd2c553`): History view, `history` / `put_back` / `clear_history` (IDs only),
+  README section, docs-drift checks.
+- **Task 6, security review:** one must-fix and three should-fixes, all fixed with tests
+  (`8462ced`):
+  - S1 (must-fix): put back and clear refuse when the window runs as administrator;
+  - S2: the window's journal use is in `history_cmd.rs` only, and the S3 tripwire is wider;
+  - S3: a kept moved copy is reported, never "nothing changed";
+  - S4: a junction planted on the way to the original folder is refused.
+  The notes are also done: no put-back into the startup folder, WindowsApps or ByteBroom's own
+  folder, and a test for a junction named like a journal.
+- **Task 7, UI pass** (`393dbf2`): buttons stay in view at 720x520, results are announced from
+  the dialog's own live region, focus goes to the next Put back button, long names wrap.
+- Checks: `./check.ps1` passes (322 tests), and `./build.ps1` builds both binaries.
+- **Open:** the owner's check (`docs/phase5-owner-check.md`), then the merge on the owner's yes.
+- Known limit: a file can't be put back directly into a profile folder or a drive root (never a
+  policy root); the window says so and the owner moves it by hand.
