@@ -402,6 +402,40 @@ impl LockedDir {
         Ok(())
     }
 
+    /// Delete the file `name` in this folder, opened relative to the held handle without
+    /// following a link. It must be a plain file with one name; a link, a folder or a file with
+    /// other hard links is refused and left alone. A name that is not there is not an error.
+    pub fn remove_file(&self, name: &str) -> io::Result<()> {
+        self.path
+            .join(name)
+            .map_err(|e| io::Error::other(e.to_string()))?;
+        let (status, raw) = self
+            .raw_open(
+                name,
+                DELETE | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+                FILE_SHARE_READ,
+                FILE_OPEN,
+                FILE_NON_DIRECTORY_FILE,
+            )
+            .map_err(|e| io::Error::other(e.to_string()))?;
+        if status < 0 || raw.is_null() {
+            // SAFETY: plain conversion of a status code.
+            let code = unsafe { RtlNtStatusToDosErrorNoTeb(status) };
+            let err = io::Error::from_raw_os_error(code as i32);
+            return match err.kind() {
+                io::ErrorKind::NotFound => Ok(()),
+                _ => Err(err),
+            };
+        }
+        // SAFETY: the open succeeded, so `raw` is a handle we own.
+        let handle = unsafe { OwnedHandle::from_raw_handle(raw) };
+        let facts = info(&handle)?;
+        if facts.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 || facts.nNumberOfLinks != 1 {
+            return Err(io::Error::other("not a plain file with one name"));
+        }
+        dispose(&handle)
+    }
+
     /// Open the file `name` in this folder for appending (and reading back), creating it if
     /// needed. A link in its place is refused, and so is a file with other hard links, which
     /// could be another file's contents under this name.

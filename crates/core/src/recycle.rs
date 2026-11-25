@@ -276,6 +276,14 @@ fn recycle_one(
             }
             match (before, after) {
                 (Some(b), Some(a)) if a.saturating_sub(b) >= size => {
+                    // Recorded only from the item the shell reported, and only if it is in a bin.
+                    if let Some(in_bin) = created.filter(is_in_recycle_bin) {
+                        out.recycled.push(crate::engine::Recycled {
+                            original: real.clone(),
+                            in_bin,
+                            bytes: size,
+                        });
+                    }
                     out.removed.push(real);
                     out.bytes_recycled += size;
                 }

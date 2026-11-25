@@ -95,6 +95,20 @@ pub struct Outcome {
     pub bytes_moved: u64,
     /// Items that are gone but need the user's attention (e.g. not found in the bin).
     pub warnings: Vec<Skipped>,
+    /// Items the Recycle Bin took, with the item the shell reported creating there (phase 5:
+    /// written to the recycled journal, never to the log).
+    pub recycled: Vec<Recycled>,
+}
+
+/// One item sent to the Recycle Bin.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Recycled {
+    /// Where it was.
+    pub original: WinPath,
+    /// The item the shell reported creating in the bin.
+    pub in_bin: WinPath,
+    /// Its size in bytes.
+    pub bytes: u64,
 }
 
 impl Outcome {

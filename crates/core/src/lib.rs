@@ -9,6 +9,7 @@ pub mod admin;
 pub mod clean;
 pub mod duplicates;
 pub mod engine;
+pub mod history;
 pub mod locations;
 pub mod paths;
 pub mod policy;

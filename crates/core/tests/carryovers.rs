@@ -309,6 +309,7 @@ fn the_app_folder_is_made_once_and_reopened_without_following_links() {
     let again = app_folder(&base).unwrap();
     let journal = Journal::open(&again, "moves.journal").unwrap();
     let entry = JournalEntry {
+        clean: None,
         time: 1,
         sha256: "A".repeat(64),
         size: 3,

@@ -125,6 +125,7 @@ fn undo_refuses_a_forged_journal_line_pointing_outside_the_roots() {
     let honest = read_journal(&journal).unwrap().remove(0);
     // A forged line: same moved file, but "restore" it into the sentinel (outside the roots).
     let forged = JournalEntry {
+        clean: None,
         source: wp(&tree.sentinel.join("planted.dll")),
         ..honest.clone()
     };
@@ -167,6 +168,7 @@ fn undo_refuses_a_forged_moved_file_in_a_protected_area() {
     layout.extra_denied.push(real_sentinel.clone());
     let guarded = Policy::new(vec![real_root], layout).unwrap();
     let forged = JournalEntry {
+        clean: None,
         dest: real_sentinel.join("system.dll").unwrap(),
         ..honest
     };
@@ -198,6 +200,7 @@ fn undo_refuses_a_moved_file_reached_through_a_link() {
     let via = tree.base.join("via");
     make_junction(&via, &dest);
     let forged = JournalEntry {
+        clean: None,
         dest: wp(&via.join("a.tmp")),
         ..honest
     };
@@ -207,11 +210,12 @@ fn undo_refuses_a_moved_file_reached_through_a_link() {
     fs::remove_dir(&via).unwrap();
 }
 
-/// Security review S3, the rule: the journal is user-writable, so only the unelevated undo in
-/// `relocate.rs` (which re-checks both ends) may read it. Elevated code (the phase 4 helper)
-/// never does. This sweep fails if any other source file starts reading it.
+/// Security review S3, the rule: the journals are user-writable, so only the unelevated undo
+/// (`relocate.rs`, which re-checks both ends), the history module and the window that calls it
+/// (phase 5) may read them. Elevated code (the phase 4 helper, `crates/admin`) never does. This
+/// sweep fails if any other source file starts reading them.
 #[test]
-fn only_the_move_module_reads_the_journal() {
+fn only_the_move_and_history_modules_and_the_window_read_the_journals() {
     let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..");
@@ -234,17 +238,37 @@ fn only_the_move_module_reads_the_journal() {
                     ".entries()",
                     "undo_move",
                     "JournalEntry::parse",
+                    // Phase 5: every other way in to the journals' contents.
+                    "JournalLine",
+                    "parse_lines",
+                    "move_history",
+                    "undo_entries",
+                    "RecycledJournal",
+                    "RecycledRecord",
+                    "clear_history",
                 ]
                 .iter()
                 .any(|name| text.contains(name))
                 {
-                    readers.push(p.file_name().unwrap().to_string_lossy().into_owned());
+                    let rel = p.strip_prefix(&repo).unwrap().to_string_lossy();
+                    readers.push(rel.replace('\\', "/"));
                 }
             }
         }
     }
     readers.sort();
-    assert_eq!(readers, vec!["relocate.rs".to_string()], "{readers:?}");
+    assert!(
+        readers.iter().all(|r| !r.starts_with("crates/admin")),
+        "the elevated helper must never read a journal: {readers:?}"
+    );
+    assert_eq!(
+        readers,
+        vec![
+            "crates/core/src/history.rs".to_string(),
+            "crates/core/src/relocate.rs".to_string(),
+        ],
+        "{readers:?}"
+    );
 }
 
 #[test]
@@ -263,6 +287,7 @@ fn undo_refuses_an_original_folder_that_is_a_junction() {
     let honest = read_journal(&journal).unwrap().remove(0);
     // The original's folder path now goes through the junction to the sentinel.
     let swapped = JournalEntry {
+        clean: None,
         source: wp(&tree.root.join("link").join("a.tmp")),
         ..honest
     };

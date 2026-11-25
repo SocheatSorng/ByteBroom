@@ -24,6 +24,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// One move, as recorded in the journal so it can be undone.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JournalEntry {
+    /// Which clean moved it (phase 5), so one clean's moves can be put back together. `None`
+    /// for a line written before phase 5 (`bytebroom-move-v1`), which is put back on its own.
+    pub clean: Option<u64>,
     /// Seconds since 1970 (UTC) when the move was recorded.
     pub time: u64,
     /// SHA-256 of the file, upper-case hex.
@@ -36,49 +39,176 @@ pub struct JournalEntry {
     pub dest: WinPath,
 }
 
-const JOURNAL_VERSION: &str = "bytebroom-move-v1";
+/// A move line written before phase 5: no clean number. Still read, never written.
+pub const MOVE_V1: &str = "bytebroom-move-v1";
+/// A move line from phase 5 on: the clean's number comes first.
+pub const MOVE_V2: &str = "bytebroom-move-v2";
+/// A line saying a move was put back (phase 5). Its own tag, so no older reader takes it for a
+/// move, and a move line is never read as one of these.
+pub const UNDONE_V1: &str = "bytebroom-undone-v1";
+
+fn sha256_ok(s: &str) -> bool {
+    s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// The fields every line ends with: time, SHA-256, size, source, destination.
+fn parse_tail<'a>(
+    mut fields: impl Iterator<Item = &'a str>,
+) -> Option<(u64, String, u64, WinPath, WinPath)> {
+    let time = fields.next()?.parse().ok()?;
+    let sha256 = fields.next()?.to_string();
+    if !sha256_ok(&sha256) {
+        return None;
+    }
+    let size = fields.next()?.parse().ok()?;
+    let source = WinPath::parse(fields.next()?).ok()?;
+    let dest = WinPath::parse(fields.next()?).ok()?;
+    if fields.next().is_some() {
+        return None;
+    }
+    Some((time, sha256, size, source, dest))
+}
 
 impl JournalEntry {
     /// One tab-separated line. Paths can't contain tabs: [`WinPath`] refuses control characters.
+    /// An entry with a clean number is written as `bytebroom-move-v2`; one without (only ever
+    /// read from an old journal) as `bytebroom-move-v1`, so it reads back the same.
     pub fn to_line(&self) -> String {
-        format!(
-            "{JOURNAL_VERSION}\t{}\t{}\t{}\t{}\t{}",
+        let tail = format!(
+            "{}\t{}\t{}\t{}\t{}",
             self.time, self.sha256, self.size, self.source, self.dest
-        )
+        );
+        match self.clean {
+            Some(clean) => format!("{MOVE_V2}\t{clean}\t{tail}"),
+            None => format!("{MOVE_V1}\t{tail}"),
+        }
     }
 
-    /// Parse a line written by [`Self::to_line`]. Anything else gives `None`.
+    /// Parse a move line written by [`Self::to_line`]. Anything else gives `None`.
     pub fn parse(line: &str) -> Option<Self> {
-        let mut fields = line.trim_end_matches(['\r', '\n']).split('\t');
-        if fields.next()? != JOURNAL_VERSION {
-            return None;
+        match JournalLine::parse(line)? {
+            JournalLine::Move(entry) => Some(entry),
+            JournalLine::Undone(_) => None,
         }
-        let time = fields.next()?.parse().ok()?;
-        let sha256 = fields.next()?.to_string();
-        if sha256.len() != 64 || !sha256.chars().all(|c| c.is_ascii_hexdigit()) {
-            return None;
-        }
-        let size = fields.next()?.parse().ok()?;
-        let source = WinPath::parse(fields.next()?).ok()?;
-        let dest = WinPath::parse(fields.next()?).ok()?;
-        if fields.next().is_some() {
-            return None;
-        }
-        Some(Self {
-            time,
-            sha256,
-            size,
-            source,
-            dest,
-        })
     }
 }
 
-/// Every valid entry in a journal file, oldest first. Unreadable lines are skipped. The
+/// A move that was put back: written after the restored file matched and the moved copy was
+/// deleted. It names the move by everything the move line recorded except its clean number.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Undone {
+    /// Seconds since 1970 (UTC) when it was put back.
+    pub time: u64,
+    /// The move's SHA-256.
+    pub sha256: String,
+    /// The move's size.
+    pub size: u64,
+    /// Where the file was (and is again).
+    pub source: WinPath,
+    /// Where the moved copy was.
+    pub dest: WinPath,
+}
+
+impl Undone {
+    /// The line saying `entry` was put back at `time`.
+    pub fn of(entry: &JournalEntry, time: u64) -> Self {
+        Self {
+            time,
+            sha256: entry.sha256.clone(),
+            size: entry.size,
+            source: entry.source.clone(),
+            dest: entry.dest.clone(),
+        }
+    }
+
+    /// Is this the record of putting back `entry`?
+    pub fn matches(&self, entry: &JournalEntry) -> bool {
+        self.sha256 == entry.sha256
+            && self.size == entry.size
+            && self.source == entry.source
+            && self.dest == entry.dest
+    }
+
+    /// One tab-separated line.
+    pub fn to_line(&self) -> String {
+        format!(
+            "{UNDONE_V1}\t{}\t{}\t{}\t{}\t{}",
+            self.time, self.sha256, self.size, self.source, self.dest
+        )
+    }
+}
+
+/// One line of the move journal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum JournalLine {
+    /// A file was moved.
+    Move(JournalEntry),
+    /// A move was put back.
+    Undone(Undone),
+}
+
+impl JournalLine {
+    /// Parse any line ByteBroom writes. A line with an unknown tag, a bad field or one field
+    /// too many gives `None` and is skipped by every reader.
+    pub fn parse(line: &str) -> Option<Self> {
+        let mut fields = line.trim_end_matches(['\r', '\n']).split('\t');
+        match fields.next()? {
+            MOVE_V1 => {
+                let (time, sha256, size, source, dest) = parse_tail(fields)?;
+                Some(Self::Move(JournalEntry {
+                    clean: None,
+                    time,
+                    sha256,
+                    size,
+                    source,
+                    dest,
+                }))
+            }
+            MOVE_V2 => {
+                let clean = fields.next()?.parse().ok()?;
+                let (time, sha256, size, source, dest) = parse_tail(fields)?;
+                Some(Self::Move(JournalEntry {
+                    clean: Some(clean),
+                    time,
+                    sha256,
+                    size,
+                    source,
+                    dest,
+                }))
+            }
+            UNDONE_V1 => {
+                let (time, sha256, size, source, dest) = parse_tail(fields)?;
+                Some(Self::Undone(Undone {
+                    time,
+                    sha256,
+                    size,
+                    source,
+                    dest,
+                }))
+            }
+            _ => None,
+        }
+    }
+}
+
+/// Every valid line of a journal's text, oldest first.
+pub fn parse_lines(text: &str) -> Vec<JournalLine> {
+    text.lines().filter_map(JournalLine::parse).collect()
+}
+
+/// Every valid move in a journal file, oldest first. Unreadable lines are skipped. The
 /// journal is user-writable, so entries are treated as untrusted: see [`undo_move`].
 pub fn read_journal(path: &Path) -> io::Result<Vec<JournalEntry>> {
     let text = std::fs::read_to_string(path)?;
     Ok(text.lines().filter_map(JournalEntry::parse).collect())
+}
+
+/// Seconds since 1970 (UTC), or 0 if the clock is before that.
+pub fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 /// The move journal, held open for appending. It is opened inside a held folder without
@@ -89,30 +219,58 @@ pub struct Journal {
     file: File,
     /// Where it is.
     pub path: WinPath,
+    /// The number every move written through this handle carries: one open is one clean.
+    pub clean: u64,
 }
 
 impl Journal {
-    /// Open (or create) the journal `name` inside the held folder `dir`.
+    /// Open (or create) the journal `name` inside the held folder `dir`, for one clean. The
+    /// clean's number is the time it was opened, in nanoseconds since 1970.
     pub fn open(dir: &LockedDir, name: &str) -> Result<Self, String> {
         let (file, path) = dir.open_append(name).map_err(|e| e.to_string())?;
-        Ok(Self { file, path })
+        let clean = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX))
+            .unwrap_or(0);
+        Ok(Self { file, path, clean })
+    }
+
+    fn write_line(&self, line: &str) -> Result<(), String> {
+        let mut file = &self.file;
+        writeln!(file, "{line}").map_err(|e| e.to_string())?;
+        self.file.sync_all().map_err(|e| e.to_string())
     }
 
     /// Add one entry and make sure it is on disk.
     pub fn append(&self, entry: &JournalEntry) -> Result<(), String> {
-        let mut file = &self.file;
-        writeln!(file, "{}", entry.to_line()).map_err(|e| e.to_string())?;
-        self.file.sync_all().map_err(|e| e.to_string())
+        self.write_line(&entry.to_line())
     }
 
-    /// Every valid entry, oldest first, read through the held handle.
-    pub fn entries(&self) -> io::Result<Vec<JournalEntry>> {
+    /// Record that a move was put back, and make sure it is on disk.
+    pub fn append_undone(&self, undone: &Undone) -> Result<(), String> {
+        self.write_line(&undone.to_line())
+    }
+
+    /// Every valid line, oldest first, read through the held handle.
+    pub fn lines(&self) -> io::Result<Vec<JournalLine>> {
         use std::io::{Seek, SeekFrom};
         let mut file = self.file.try_clone()?;
         file.seek(SeekFrom::Start(0))?;
         let mut text = String::new();
         file.read_to_string(&mut text)?;
-        Ok(text.lines().filter_map(JournalEntry::parse).collect())
+        Ok(parse_lines(&text))
+    }
+
+    /// Every valid move, oldest first, read through the held handle.
+    pub fn entries(&self) -> io::Result<Vec<JournalEntry>> {
+        Ok(self
+            .lines()?
+            .into_iter()
+            .filter_map(|l| match l {
+                JournalLine::Move(e) => Some(e),
+                JournalLine::Undone(_) => None,
+            })
+            .collect())
     }
 }
 
@@ -319,10 +477,8 @@ impl MoveSteps for RealMove<'_> {
             .map(|c| c.path.clone())
             .ok_or("no copy to record")?;
         let entry = JournalEntry {
-            time: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0),
+            clean: Some(self.journal.clean),
+            time: now_secs(),
             sha256: sha256.to_string(),
             size,
             source: self.source_path.clone(),
@@ -569,14 +725,104 @@ fn parent_of(path: &WinPath) -> Option<(WinPath, String)> {
 /// copy is deleted only after the restored file matched the recorded size and SHA-256.
 pub fn undo_move(policy: &Policy, entry: &JournalEntry) -> Result<(), String> {
     let (parent, name) = parent_of(&entry.source).ok_or("the original path has no folder")?;
-    let folder = lock_dir(&parent).map_err(|e| format!("the original folder: {e}"))?;
-    policy
-        .check_container(&crate::policy::ResolvedPath {
-            final_path: folder.path.clone(),
-            is_reparse_point: false,
-        })
-        .map_err(|r| format!("the original folder: {r}"))?;
+    let (folder, held) = hold_original_folder(policy, &parent)?;
+    let result = restore_into(policy, entry, &folder, &name);
+    if result.is_err()
+        && let Some(held) = held
+    {
+        // Leave no empty folder behind that this undo made: innermost first, each through its
+        // own handle, and only if still empty.
+        let _ = folder.remove_if_empty();
+        for dir in held.made.into_iter().rev() {
+            let _ = dir.remove_if_empty();
+        }
+        drop(held.above);
+    }
+    result
+}
 
+/// How many missing folders an undo may make again (a moved folder's files go back into it).
+const MAX_RECREATED: usize = 32;
+
+/// Hold the folder a moved file goes back into. If it is gone (its folder was moved too), the
+/// nearest folder above it that still exists must pass the policy, and the missing ones are made
+/// again inside it, one held folder at a time, never following or reusing anything. Returns the
+/// held folder and, if folders were made, what holds the folders above it, so a failed undo can
+/// remove what it made.
+fn hold_original_folder(
+    policy: &Policy,
+    parent: &WinPath,
+) -> Result<(LockedDir, Option<Recreated>), String> {
+    let container = |path: &WinPath| crate::policy::ResolvedPath {
+        final_path: path.clone(),
+        is_reparse_point: false,
+    };
+    let mut missing: Vec<String> = Vec::new();
+    let mut at = parent.clone();
+    let held = loop {
+        match lock_dir(&at) {
+            Ok(held) => break held,
+            Err(crate::win::OpenError::NotFound) if missing.len() < MAX_RECREATED => {
+                let (up, name) = parent_of(&at).ok_or("the original folder is gone")?;
+                missing.push(name);
+                at = up;
+            }
+            Err(e) => return Err(format!("the original folder: {e}")),
+        }
+    };
+    policy
+        .check_container(&container(&held.path))
+        .map_err(|r| format!("the original folder: {r}"))?;
+    if missing.is_empty() {
+        return Ok((held, None));
+    }
+    // Every folder to be made must itself be one files may be restored into.
+    let mut path = held.path.clone();
+    for name in missing.iter().rev() {
+        path = path.join(name).map_err(|e| e.to_string())?;
+        policy
+            .check_container(&container(&path))
+            .map_err(|r| format!("the original folder: {r}"))?;
+    }
+    let mut made: Vec<LockedDir> = Vec::new();
+    for name in missing.iter().rev() {
+        let next = made.last().unwrap_or(&held).create_dir(name);
+        match next {
+            Ok(dir) => made.push(dir),
+            Err(e) => {
+                for dir in made.into_iter().rev() {
+                    let _ = dir.remove_if_empty();
+                }
+                return Err(format!("the original folder can't be made again: {e}"));
+            }
+        }
+    }
+    // The innermost one is where the file goes; the others (and the folder above them) stay
+    // held until the undo is done, so none can be renamed or swapped meanwhile.
+    let folder = made.pop().ok_or("the original folder is gone")?;
+    if folder.path != path {
+        let _ = folder.remove_if_empty();
+        for dir in made.into_iter().rev() {
+            let _ = dir.remove_if_empty();
+        }
+        return Err("the original folder is not where it was made".into());
+    }
+    Ok((folder, Some(Recreated { above: held, made })))
+}
+
+/// The folders an undo holds above the one the file goes into: the existing folder it started
+/// from, and the missing ones it made (outermost first).
+struct Recreated {
+    above: LockedDir,
+    made: Vec<LockedDir>,
+}
+
+fn restore_into(
+    policy: &Policy,
+    entry: &JournalEntry,
+    folder: &LockedDir,
+    name: &str,
+) -> Result<(), String> {
     let moved = win::open_no_follow(&entry.dest, Access::Move)
         .map_err(|e| format!("the moved file: {e}"))?;
     if moved.resolved.is_reparse_point || moved.is_directory {
@@ -599,7 +845,7 @@ pub fn undo_move(policy: &Policy, entry: &JournalEntry) -> Result<(), String> {
         return Err("the moved file has changed since it was moved".into());
     }
 
-    let restored = match folder.create_file(&name) {
+    let restored = match folder.create_file(name) {
         Ok(c) => c,
         Err(CreateError::Exists) => return Err("something is already at the original place".into()),
         Err(e) => return Err(format!("cannot recreate the original: {e}")),
@@ -710,9 +956,78 @@ mod tests {
         }
     }
 
+    fn sample(clean: Option<u64>) -> JournalEntry {
+        JournalEntry {
+            clean,
+            time: 1_795_000_000,
+            sha256: "0F".repeat(32),
+            size: 42,
+            source: WinPath::parse("C:\\Users\\Ann\\Downloads\\big file.iso").unwrap(),
+            dest: WinPath::parse("D:\\Moved\\big file.iso").unwrap(),
+        }
+    }
+
+    #[test]
+    fn phase_5_writes_v2_moves_and_still_reads_v1() {
+        let new = sample(Some(1_795_000_000_123_456_789));
+        let line = new.to_line();
+        assert!(
+            line.starts_with("bytebroom-move-v2\t1795000000123456789\t"),
+            "{line}"
+        );
+        assert_eq!(JournalEntry::parse(&line), Some(new.clone()));
+        // A line written before phase 5 still reads, with no clean number.
+        let old = format!(
+            "bytebroom-move-v1\t1795000000\t{}\t42\tC:\\Users\\Ann\\Downloads\\big file.iso\tD:\\Moved\\big file.iso",
+            "0F".repeat(32)
+        );
+        assert_eq!(JournalEntry::parse(&old), Some(sample(None)));
+        // A v2 line without its clean number, or with text there, is not a move.
+        let tail = old.trim_start_matches("bytebroom-move-v1\t");
+        assert_eq!(
+            JournalEntry::parse(&format!("bytebroom-move-v2\t{tail}")),
+            None
+        );
+        assert_eq!(
+            JournalEntry::parse(&format!("bytebroom-move-v2\tabc\t{tail}")),
+            None
+        );
+        // And a v1 line with a clean number in front is not read either.
+        assert_eq!(
+            JournalEntry::parse(&format!("bytebroom-move-v1\t7\t{tail}")),
+            None
+        );
+    }
+
+    #[test]
+    fn an_undone_line_is_never_read_as_a_move_nor_a_move_as_undone() {
+        let entry = sample(Some(9));
+        let undone = Undone::of(&entry, 1_795_000_100);
+        let line = undone.to_line();
+        assert!(line.starts_with("bytebroom-undone-v1\t"), "{line}");
+        assert_eq!(JournalEntry::parse(&line), None);
+        assert_eq!(
+            JournalLine::parse(&line),
+            Some(JournalLine::Undone(undone.clone()))
+        );
+        assert!(undone.matches(&entry));
+        assert!(
+            undone.matches(&sample(None)),
+            "the clean number is not part of the match"
+        );
+        let mut other = entry.clone();
+        other.sha256 = "1F".repeat(32);
+        assert!(!undone.matches(&other));
+        assert_eq!(
+            parse_lines(&format!("{}\n{line}\r\nnonsense\n", entry.to_line())),
+            vec![JournalLine::Move(entry), JournalLine::Undone(undone)]
+        );
+    }
+
     #[test]
     fn journal_lines_round_trip_and_reject_anything_else() {
         let entry = JournalEntry {
+            clean: None,
             time: 1_795_000_000,
             sha256: "0F".repeat(32),
             size: 42,

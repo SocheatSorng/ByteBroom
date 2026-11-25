@@ -183,6 +183,7 @@ fn merge(into: &mut Outcome, from: Outcome) {
     into.removed.extend(from.removed);
     into.skipped.extend(from.skipped);
     into.warnings.extend(from.warnings);
+    into.recycled.extend(from.recycled);
     into.bytes_freed += from.bytes_freed;
     into.bytes_recycled += from.bytes_recycled;
     into.bytes_moved += from.bytes_moved;
