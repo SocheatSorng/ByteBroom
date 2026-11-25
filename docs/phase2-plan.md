@@ -162,17 +162,20 @@ Each task: code → tests → fmt + clippy → full tests → commit with a "why
   - It has no delete, move or recycle option at all. A test checks that the binary links no engine
     functions that act.
   - Its output stays in the owner's terminal and is never written to a file.
-- [ ] **10. Security review**
+- [x] **10. Security review**
   - `agent-skills:security-auditor` reviews the scanner read-only, with a focus on:
     - a rule that could match something it shouldn't;
     - the "never listed" exclusions;
     - the hand-off to the engine.
 
   Every must-fix is fixed with a test.
+  - Done: 1 must-fix and 7 should-fix items, each checked against the code, fixed with a test,
+    and each test shown to fail with its fix switched off. See "Security review" below.
 - [ ] **11. Owner check**
   - The owner runs the read-only scan tool on their PC and compares a few totals with what Windows
     shows (for example the Recycle Bin, the Downloads folder, the temp folder).
   - Merge with `--ff-only` on the owner's yes.
+  - Exact steps: `docs/phase2-owner-check.md`.
 
 ## Risks
 
@@ -190,6 +193,78 @@ Each task: code → tests → fmt + clippy → full tests → commit with a "why
   than their length. Phase 2 reports length and marks cloud placeholders. Exact "space on disk"
   numbers wait for phase 3, if the owner wants them.
 
+## Security review
+
+Reviewed read-only by `agent-skills:security-auditor` on 2026-11-25.
+
+**Must-fix (fixed):**
+
+- **M1. A vault, key or browser login inside an offered folder would have been deleted.** The
+  walker left "never listed" items out of a finding's size, but the engine emptied the whole folder.
+  `Policy::check_target` and `check_container` now refuse any path with a never-listed part
+  (`Refusal::NeverListed`); every delete, recycle and move passes there. Test: a pre-ticked temp
+  folder holding a `.kdbx`, `Login Data`, a `.ssh` key and a `.pem` keeps those four.
+
+**Should-fix (fixed):**
+
+- **S1.** A duplicate and its kept copy could both be chosen (the kept copy can also be an old
+  installer or large file). `plan_clean` refuses that selection (`SelectError::LastCopy`).
+- **S2.** `bin` and `dist` beside a `.git` are often tracked source. Each build-folder name now needs
+  its project file beside it (`package.json`, `Cargo.toml`/`pom.xml`, a .NET project file).
+- **S3.** Another Windows on another drive (`D:\Windows`, `D:\Program Files`, `D:\ProgramData`) is now
+  on the hard floor.
+- **S4.** Temp freshness used only last-write dates. It now uses creation and change dates too, over
+  files and folders, and a temp item with any part not seen is never offered.
+- **S5.** The large-file search entered AppData (WSL and Docker disk images). It now skips every
+  AppData folder, and never offers a cloud placeholder.
+- **S6.** Downloads could point at another user's files. It is used only inside the owner's profile or
+  on another drive outside every profile.
+- **S7.** The "acts on nothing" test now also reads every core module the scan runs for file writes
+  and acting calls, and bans five more Windows calls.
+
+**Follow-ups (later phases):**
+
+- **F1 (phase 3).** A finding carries no file identity. Record volume serial, file id, length and date
+  at scan time and re-check them right before acting; re-hash duplicates before removing one; re-run
+  the 24-hour rule.
+- **F2.** Protected key and credential folders assume `AppData\Roaming` under the profile; also derive
+  them from `FOLDERID_RoamingAppData` for redirected AppData.
+- **F3.** Grow the "never listed" list: Firefox `logins.json`, `key4.db`, `cert9.db`,
+  `cookies.sqlite`, `places.sqlite`; `*.ppk`, `id_rsa`, `id_ed25519`; `*.kdb`, `*.psafe3`, `*.gpg`;
+  other wallets. Needs the owner's yes (it changes what is never shown).
+- **F4 (phase 4).** Elevated as a different admin account, the profile, environment and Recycle Bin
+  are that account's. Detect it or warn.
+- **F5 (phase 3).** Large files directly in the profile or at a drive root get a root `Policy::new`
+  refuses; show them as "can't be cleaned here" or hide them.
+- **F6.** Hashing may update last-access times where NTFS keeps them (harmless). The walk's name-bound
+  sum has no overflow check; fine on 64-bit.
+
+Checked and found sound by the reviewer: the walk's buffer parsing; name tricks (alternate data
+streams, DOS wildcards, trailing dots, device names, 8.3 names); the red-tier listing and Recycle Bin
+query; hashing never downloading cloud files; root checks against swapped junctions; search areas
+never yielding a sensitive root; protected-area matching; links in Temp; wildcard expansion; the
+name matcher; privacy (nothing writes or sends names).
+
 ## Results
 
-(filled in at the end of the phase)
+- **Built:**
+  - trusted locations;
+  - the rule catalogue as data, with the owner's decisions;
+  - a no-follow, handle-based walker;
+  - green and amber findings, large files and duplicates;
+  - read-only red-tier sizes;
+  - the selection-to-engine hand-off with new protected areas;
+  - totals counting each file once;
+  - the read-only scan tool, proven to contain no acting code.
+
+  Version 0.2.0.
+- **Speed:** 200,000 files in 20,204 folders scanned in 18.9 s (release, warm cache).
+- **Bugs found by tests:**
+  - the profile-wide searches skipped the whole profile on a real PC (the profile root is on the
+    floor as a delete target);
+  - a test's two "same-date" files differed by microseconds;
+  - a decoy check missed a kept copy that came from AppData;
+  - a Downloads value in a different letter case was refused before being respelled.
+
+  Each has a regression test.
+- **Owner check:** pending (`docs/phase2-owner-check.md`).
