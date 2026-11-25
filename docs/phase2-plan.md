@@ -166,6 +166,16 @@ Each task: code → tests → fmt + clippy → full tests → commit with a "why
     that hour: generating the tree took 617 s against 389 s, and the walk alone 25.3 s against
     12.4 s. The fake tree has no duplicates, so the parallel hashing shows only on a real drive.
     The owner's re-run gives the real number.
+  - **Owner's re-run: 175.5 s** (was 780 s, about 4.5 times faster). By step:
+    - duplicates (hashing) 139.5 s;
+    - the shared search walk 20.0 s;
+    - developer caches 7.1 s;
+    - every other step under 3 s.
+
+    Duplicates are now bound by disk reads: about 30 GB must be read in full to prove copies
+    identical, and that proof is not loosened.
+  - **Phase 3:** run duplicates as a background step, so the window shows everything else in about
+    35 s, and re-check each copy just before removing it (follow-up F1).
 - [x] **9. Read-only scan tool**
   - Acceptance: `cargo run --release -p bytebroom-scan` prints the totals for each category and
     tier, the 20 largest findings and how many folders it could not read.
@@ -268,7 +278,10 @@ name matcher; privacy (nothing writes or sends names).
   - the read-only scan tool, proven to contain no acting code.
 
   Version 0.2.0.
-- **Speed:** 200,000 files in 20,204 folders scanned in 18.9 s (release, warm cache).
+- **Speed:**
+  - Fake tree: 200,000 files in 20,204 folders scanned in 18.9 s (release, warm cache).
+  - Owner's PC (profile plus D: and E:): 780 s at first, 175.5 s after one shared walk and hashing
+    in parallel per drive. 139.5 s of that is duplicate hashing; phase 3 moves it to the background.
 - **Bugs found by tests:**
   - the profile-wide searches skipped the whole profile on a real PC (the profile root is on the
     floor as a delete target);
@@ -277,4 +290,15 @@ name matcher; privacy (nothing writes or sends names).
   - a Downloads value in a different letter case was refused before being respelled.
 
   Each has a regression test.
-- **Owner check:** pending (`docs/phase2-owner-check.md`).
+- **Owner check (2026-11-25):** `./check.ps1` passed on the owner's PC; the read-only scan ran on
+  the profile, D: and E:. Claude compared it with Windows, read-only:
+  - the Recycle Bin (19.7 GB; Windows' own list shows 18.4 GB because it reports recycled folders as
+    0 bytes);
+  - the page file (2.6 GB) and hibernation file (6.4 GB);
+  - the temp folder (6.0 GB offered of 6.1 GB, the rest under 24 hours old);
+  - old installers in Downloads (169 files, 19.0 GB, exact);
+  - three of the largest items.
+
+  All matched. Open for phase 3: VM disks (`.vmdk`, `.vdi`) are offered as large files (amber,
+  unticked) and need a label or the owner's choice to leave them out; items at a drive root can't
+  be cleaned (F5).
