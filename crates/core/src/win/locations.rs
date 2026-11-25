@@ -14,7 +14,7 @@ use windows_sys::Win32::System::WindowsProgramming::DRIVE_FIXED;
 use windows_sys::Win32::UI::Shell::{FOLDERID_Downloads, FOLDERID_LocalAppData, FOLDERID_Profile};
 
 /// Letters of the fixed drives (no removable, network, optical or RAM drives).
-fn fixed_drives() -> Vec<char> {
+pub fn fixed_drives() -> Vec<char> {
     // SAFETY: no arguments; returns a bit mask of the drive letters in use.
     let mask = unsafe { GetLogicalDrives() };
     (0u8..26)

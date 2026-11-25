@@ -6,8 +6,11 @@
 //! findings (see `bytebroom_core::scan::scan_in_steps`), so indexes handed out by the first step
 //! keep naming the same findings.
 
-use crate::boundary::FindingId;
+use crate::boundary::{Action, Choice, FindingId, PreviewId};
 use bytebroom_core::locations::Skipped;
+use bytebroom_core::paths::WinPath;
+use bytebroom_core::policy::SystemLayout;
+use bytebroom_core::preview::{self as core_preview, Preview};
 use bytebroom_core::red::RedFinding;
 use bytebroom_core::scan::Finding;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -79,6 +82,23 @@ struct Inner {
     cancel: Arc<AtomicBool>,
     started: Option<Instant>,
     took: Option<Duration>,
+    /// The folder moves go to, as the owner picked it (kept across scans).
+    move_to: Option<WinPath>,
+    /// The latest preview of this scan; `clean` takes it, once.
+    preview: Option<(PreviewId, Arc<Preview>)>,
+    /// How many previews this scan has made.
+    previews_made: u32,
+}
+
+/// A preview ready for confirming: its ID, what it does, and the findings it refers to.
+#[derive(Debug, Clone)]
+pub struct Ready {
+    /// What the page sends back to confirm it.
+    pub id: PreviewId,
+    /// What it does.
+    pub preview: Arc<Preview>,
+    /// The scan's findings (the preview refers to them by index).
+    pub findings: Arc<Vec<Finding>>,
 }
 
 /// What the page is shown about the current scan.
@@ -185,6 +205,7 @@ impl Session {
                 version: i.version.wrapping_add(1),
                 cancel: cancel.clone(),
                 started: Some(Instant::now()),
+                move_to: i.move_to.take(),
                 ..Inner::default()
             };
             Reporter {
@@ -231,16 +252,80 @@ impl Session {
         }
     }
 
-    /// The current scan's number and findings, for building a preview.
-    pub fn findings(&self) -> (u32, Arc<Vec<Finding>>) {
-        let i = self.lock();
-        (i.scan, i.findings.clone())
-    }
-
     /// Check that `id` names a finding of the current scan, and return its index.
     pub fn check(&self, id: FindingId) -> Result<usize, Stale> {
         let i = self.lock();
         check_id(i.scan, &i.findings, id)
+    }
+
+    /// Remember the folder moves go to (already checked by the caller).
+    pub fn set_move_to(&self, dest: WinPath) {
+        let mut i = self.lock();
+        i.move_to = Some(dest);
+        // A preview made for another destination must not be confirmed.
+        i.preview = None;
+    }
+
+    /// The folder moves go to, if one was picked.
+    pub fn move_to(&self) -> Option<WinPath> {
+        self.lock().move_to.clone()
+    }
+
+    /// Build a preview of `choices` over the current scan and keep it for `take_preview`. Only a
+    /// finished (or stopped) scan can be previewed, and every ID must be from it. Each preview
+    /// replaces the one before, so only the latest can be confirmed.
+    pub fn make_preview(&self, choices: &[Choice], layout: &SystemLayout) -> Result<Ready, String> {
+        let mut i = self.lock();
+        if i.phase.running() {
+            return Err("wait for the scan to finish, or stop it".into());
+        }
+        let mut core_choices = Vec::with_capacity(choices.len());
+        for c in choices {
+            let index = check_id(i.scan, &i.findings, c.finding).map_err(|e| e.to_string())?;
+            core_choices.push(core_preview::Choice {
+                index,
+                action: match c.action {
+                    Action::Recycle => core_preview::Action::Recycle,
+                    Action::Delete => core_preview::Action::Delete,
+                    Action::Move => core_preview::Action::Move,
+                },
+            });
+        }
+        let preview = core_preview::preview(&i.findings, &core_choices, i.move_to.as_ref(), layout)
+            .map_err(|e| e.to_string())?;
+        i.previews_made = i.previews_made.wrapping_add(1);
+        let id = PreviewId {
+            scan: i.scan,
+            number: i.previews_made,
+        };
+        let preview = Arc::new(preview);
+        i.preview = Some((id, preview.clone()));
+        Ok(Ready {
+            id,
+            preview,
+            findings: i.findings.clone(),
+        })
+    }
+
+    /// Take the preview `id` for cleaning. It must be the latest preview of the current scan,
+    /// and it can be taken once: a second `clean` of the same preview is refused.
+    pub fn take_preview(&self, id: PreviewId) -> Result<Ready, String> {
+        let mut i = self.lock();
+        if i.phase.running() {
+            return Err("a scan is running; preview again when it ends".into());
+        }
+        match i.preview.take() {
+            Some((kept, preview)) if kept == id && id.scan == i.scan => Ok(Ready {
+                id,
+                preview,
+                findings: i.findings.clone(),
+            }),
+            other => {
+                // Not this one: the latest preview stays for its own confirm.
+                i.preview = other;
+                Err("that preview is out of date; preview again".into())
+            }
+        }
     }
 }
 
@@ -358,6 +443,82 @@ mod tests {
         assert_ne!(end.version, mid.version);
         assert_eq!(end.findings[0].path, mid.findings[0].path);
         assert_eq!(s.check(id(scan, 1)), Ok(1));
+    }
+
+    fn layout() -> SystemLayout {
+        let p = |s: &str| WinPath::parse(s).unwrap();
+        SystemLayout {
+            system_root: p("C:\\Windows"),
+            program_files: vec![p("C:\\Program Files")],
+            program_data: p("C:\\ProgramData"),
+            profiles_dir: p("C:\\Users"),
+            profile_roots: vec![p("C:\\Users\\Ann")],
+            extra_denied: Vec::new(),
+        }
+    }
+
+    fn choose(scan: u32, index: u32) -> Choice {
+        Choice {
+            finding: id(scan, index),
+            action: Action::Delete,
+        }
+    }
+
+    fn finished_session() -> (Arc<Session>, u32) {
+        let s = Arc::new(Session::default());
+        let (scan, t) = s.start(|r| r.finished(vec![finding("a"), finding("b")], false));
+        t.unwrap().join().unwrap();
+        (s, scan)
+    }
+
+    #[test]
+    fn a_preview_can_be_cleaned_once_and_only_the_latest() {
+        let (s, scan) = finished_session();
+        let first = s.make_preview(&[choose(scan, 0)], &layout()).unwrap();
+        let second = s.make_preview(&[choose(scan, 1)], &layout()).unwrap();
+        assert_ne!(first.id, second.id);
+        // The older preview is out of date; the latest is still there afterwards.
+        assert!(s.take_preview(first.id).is_err());
+        let taken = s.take_preview(second.id).unwrap();
+        assert_eq!(taken.preview.actions[0].items, vec![1]);
+        // Once only.
+        assert!(s.take_preview(second.id).is_err());
+    }
+
+    #[test]
+    fn previews_refuse_stale_ids_and_die_with_their_scan() {
+        let (s, scan) = finished_session();
+        let ready = s.make_preview(&[choose(scan, 0)], &layout()).unwrap();
+        assert!(s.make_preview(&[choose(scan + 1, 0)], &layout()).is_err());
+        assert!(s.make_preview(&[choose(scan, 7)], &layout()).is_err());
+        let (_, t) = s.start(|r| r.finished(vec![finding("a")], false));
+        t.unwrap().join().unwrap();
+        assert!(
+            s.take_preview(ready.id).is_err(),
+            "a new scan ends old previews"
+        );
+        assert!(s.make_preview(&[choose(scan, 0)], &layout()).is_err());
+    }
+
+    #[test]
+    fn no_preview_or_clean_while_a_scan_runs_and_a_new_destination_ends_the_preview() {
+        let (s, scan) = finished_session();
+        let ready = s.make_preview(&[choose(scan, 0)], &layout()).unwrap();
+        s.set_move_to(WinPath::parse("D:\\Keep").unwrap());
+        assert!(s.take_preview(ready.id).is_err());
+
+        let (go_tx, go_rx) = mpsc::channel::<()>();
+        let (scan2, t) = s.start(move |r| {
+            r.first_step(&[finding("a")]);
+            go_rx.recv().unwrap();
+            r.finished(vec![finding("a")], false);
+        });
+        assert!(s.make_preview(&[choose(scan2, 0)], &layout()).is_err());
+        go_tx.send(()).unwrap();
+        t.unwrap().join().unwrap();
+        assert!(s.make_preview(&[choose(scan2, 0)], &layout()).is_ok());
+        // The destination is kept across scans.
+        assert_eq!(s.move_to(), Some(WinPath::parse("D:\\Keep").unwrap()));
     }
 
     #[test]

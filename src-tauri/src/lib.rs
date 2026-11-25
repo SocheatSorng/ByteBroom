@@ -11,12 +11,14 @@ pub mod session;
 pub mod view;
 
 use boundary::{Choice, PreviewId};
+use bytebroom_core::paths::WinPath;
+use bytebroom_core::policy::{SystemLayout, denied_reason};
 use serde::Serialize;
 use session::{Reporter, Session};
 use std::sync::Arc;
 use std::time::SystemTime;
-use tauri::{State, WebviewUrl, WebviewWindowBuilder};
-use view::ScanView;
+use tauri::{AppHandle, State, WebviewUrl, WebviewWindowBuilder};
+use view::{PreviewView, ScanView};
 
 /// An error the page can show. Text goes out to the page only, never in.
 #[derive(Debug, Clone, Serialize)]
@@ -89,15 +91,42 @@ fn cancel_scan(session: State<'_, Arc<Session>>) {
 
 /// Progress, red-tier sizes and, when they changed since version `seen`, the findings.
 #[tauri::command]
-fn scan_state(session: State<'_, Arc<Session>>, seen: u32) -> ScanView {
-    view::scan_view(&session.snapshot(), seen)
+fn scan_state(session: State<'_, Arc<Session>>, layout: State<'_, Layout>, seen: u32) -> ScanView {
+    view::scan_view(&session.snapshot(), seen, &layout.0)
 }
 
-/// Turn the owner's choices into a preview of exactly what would happen.
+/// Turn the owner's choices into a preview of exactly what would happen. Rust looks every ID up
+/// in its own copy of the scan; the preview is kept for `clean`.
 #[tauri::command]
-fn preview(choices: Vec<Choice>) -> Reply<()> {
-    let _ = choices;
-    Err(CommandError::new(NOT_YET))
+fn preview(
+    session: State<'_, Arc<Session>>,
+    layout: State<'_, Layout>,
+    choices: Vec<Choice>,
+) -> Reply<PreviewView> {
+    session
+        .make_preview(&choices, &layout.0)
+        .map(|ready| view::preview_view(&ready))
+        .map_err(|e| CommandError::new(&e))
+}
+
+/// The system layout (Windows, Program Files, profiles), read once at start.
+pub struct Layout(pub SystemLayout);
+
+/// Why `dest` can't take moved files, or `None` if it can: it must be on a fixed drive and off
+/// the hard floor (Windows, Program Files, a profile root, a drive root). Pure; the move itself
+/// checks the folder again on disk when it runs.
+pub fn destination_problem(
+    dest: &WinPath,
+    fixed_drives: &[char],
+    layout: &SystemLayout,
+) -> Option<String> {
+    if !fixed_drives
+        .iter()
+        .any(|d| d.eq_ignore_ascii_case(&dest.drive()))
+    {
+        return Some("choose a folder on a fixed drive (not removable or network)".into());
+    }
+    denied_reason(dest, layout).map(|why| format!("that folder is protected ({why})"))
 }
 
 /// Act on exactly the confirmed preview, once.
@@ -107,10 +136,45 @@ fn clean(preview_id: PreviewId) -> Reply<()> {
     Err(CommandError::new(NOT_YET))
 }
 
-/// Ask the owner for a move destination with Windows' own folder dialog (run by Rust).
+/// Ask the owner for a move destination with Windows' own folder dialog, run by Rust (the page
+/// has no dialog permission and never sends a path). Returns the folder to show, or `None` if
+/// the owner closed the dialog.
 #[tauri::command]
-fn pick_move_destination() -> Reply<()> {
-    Err(CommandError::new(NOT_YET))
+async fn pick_move_destination(
+    app: AppHandle,
+    session: State<'_, Arc<Session>>,
+    layout: State<'_, Layout>,
+) -> Reply<Option<String>> {
+    use bytebroom_core::win::{Access, open_no_follow};
+    use tauri_plugin_dialog::DialogExt;
+
+    let Some(picked) = app
+        .dialog()
+        .file()
+        .set_title("Move to which folder? (on another drive)")
+        .blocking_pick_folder()
+    else {
+        return Ok(None);
+    };
+    let fail = |m: &str| CommandError::new(m);
+    let path = picked
+        .into_path()
+        .map_err(|_| fail("that folder can't be used"))?;
+    let text = path
+        .to_str()
+        .ok_or_else(|| fail("that folder's name can't be used"))?;
+    let asked = WinPath::parse(text).map_err(|_| fail("that folder can't be used"))?;
+    let opened = open_no_follow(&asked, Access::Inspect).map_err(|e| fail(&e.to_string()))?;
+    if opened.resolved.is_reparse_point || !opened.is_directory {
+        return Err(fail("choose a real folder (not a link or shortcut)"));
+    }
+    let dest = opened.resolved.final_path;
+    let fixed = bytebroom_core::win::locations::fixed_drives();
+    if let Some(problem) = destination_problem(&dest, &fixed, &layout.0) {
+        return Err(fail(&problem));
+    }
+    session.set_move_to(dest.clone());
+    Ok(Some(dest.to_string()))
 }
 
 /// Open the Recycle Bin in Explorer, so the owner can restore or empty it.
@@ -130,7 +194,9 @@ pub fn is_app_url(url: &tauri::Url) -> bool {
 /// Build and run the app. Returns when the window closes.
 pub fn run() -> tauri::Result<()> {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(Arc::new(Session::default()))
+        .manage(Layout(bytebroom_core::win::system_layout()))
         .invoke_handler(tauri::generate_handler![
             start_scan,
             cancel_scan,
@@ -155,6 +221,37 @@ pub fn run() -> tauri::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn moves_go_only_to_unprotected_folders_on_fixed_drives() {
+        let p = |s: &str| WinPath::parse(s).unwrap();
+        let layout = SystemLayout {
+            system_root: p("C:\\Windows"),
+            program_files: vec![p("C:\\Program Files")],
+            program_data: p("C:\\ProgramData"),
+            profiles_dir: p("C:\\Users"),
+            profile_roots: vec![p("C:\\Users\\Ann")],
+            extra_denied: Vec::new(),
+        };
+        let fixed = ['C', 'D'];
+        assert_eq!(destination_problem(&p("D:\\Keep"), &fixed, &layout), None);
+        assert_eq!(
+            destination_problem(&p("d:\\Keep\\Old"), &fixed, &layout),
+            None
+        );
+        for bad in [
+            "E:\\Stick",
+            "D:\\",
+            "C:\\Windows\\Temp2",
+            "C:\\Program Files\\X",
+            "C:\\Users\\Ann",
+        ] {
+            assert!(
+                destination_problem(&p(bad), &fixed, &layout).is_some(),
+                "{bad}"
+            );
+        }
+    }
 
     #[test]
     fn only_the_apps_own_pages_are_allowed() {

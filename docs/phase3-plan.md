@@ -119,7 +119,7 @@ Each task: code → tests → fmt + clippy → full tests → commit with a "why
     - each finding gets an opaque ID and its file identity (F1);
     - the walker exposes file IDs.
   - Tests: IDs from one scan are never accepted after a new scan; cancel stops both steps.
-- [ ] **3. Preview**
+- [x] **3. Preview**
   - Acceptance: choices (ID + action) become a preview with:
     - the targets;
     - the bytes that will really come back per action;

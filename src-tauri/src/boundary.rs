@@ -37,7 +37,7 @@ pub struct Choice {
 }
 
 /// A preview the owner has seen. `clean` acts on exactly this preview, once.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PreviewId {
     /// Which scan the preview was built from.

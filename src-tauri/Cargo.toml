@@ -24,6 +24,8 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 bytebroom-core = { path = "../crates/core" }
 tauri = { version = "2", features = [] }
+# Owner's decision 4: the native folder dialog, used from Rust only (no page permission).
+tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]

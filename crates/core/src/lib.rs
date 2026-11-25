@@ -10,6 +10,7 @@ pub mod engine;
 pub mod locations;
 pub mod paths;
 pub mod policy;
+pub mod preview;
 pub mod recycle;
 pub mod red;
 pub mod relocate;

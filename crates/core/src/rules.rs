@@ -221,6 +221,9 @@ pub const NEVER_LISTED_EXTENSIONS: [&str; 11] = [
     "ppk",
 ];
 
+/// Virtual machine disks (owner's decision 2): kept in large files, labelled, never ticked.
+pub const VM_DISK_EXTENSIONS: [&str; 6] = ["vmdk", "vdi", "vhd", "vhdx", "qcow2", "ova"];
+
 /// SQLite companion files that hold the same data as the database they sit next to.
 const SQLITE_COMPANIONS: [&str; 3] = ["-journal", "-wal", "-shm"];
 
