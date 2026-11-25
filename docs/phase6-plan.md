@@ -1,6 +1,7 @@
 # Phase 6 plan: release
 
-Status: **draft, 2026-11-25.** The owner answers the decisions below before any code is written.
+Status: **decided, 2026-11-25.** The owner chose the recommended option for all eight decisions
+(see "Owner decisions"). Task 0 is the Windows dialog check below, then the plan's tasks.
 Branch: `phase-6-release`, cut from `main` at `1b05dcd` (phase 5 merged). In a new worktree,
 fast-forward to `main` first.
 
@@ -15,8 +16,19 @@ fast-forward to `main` first.
 1. **Phase 4's last owner check**, if not done yet: after 19:23 on 2026-11-26, run
    `cargo run --release -p bytebroom-admin --example elevate_restore_point`. Expected `Done`, and
    `rstrui.exe` lists a fresh "ByteBroom: restore point on request" (`docs/phase4-plan.md`).
-2. **Phase 3's open item:** Windows' own amber dialog. The phase 5 owner check went through it
-   (step 3, "Clean them"); confirm with the owner that it was seen, then close the item in the spec.
+2. **Phase 3's open item: still open, and now a possible safety bug.** Asked on 2026-11-25, the
+   owner said a dialog appeared during the phase 5 check and they closed it with **Esc** ("a random
+   guess, but it did close"). `src-tauri/src/confirm.rs` treats Esc as Cancel, so if that was
+   ByteBroom's "clean your own files?" dialog, the clean should have stopped, yet the phase 5
+   recycle went ahead. Either the dialog was a different one, or Esc let a clean through.
+   **Task 0 (before the installer):**
+   - log the native confirm's result (Confirmed / Cancelled, never file names) and show the dialog
+     with the main window as its parent;
+   - a test that every outcome other than the confirming button stops the clean, including Esc;
+   - owner check with exact steps: one amber test file to the Recycle Bin, press Esc on the
+     dialog, and expect "nothing cleaned"; then repeat with "Clean them" and expect it recycled.
+     Claude reads the log line and the Recycle Bin read-only.
+   Close the item in `docs/spec.md` only after that check passes.
 3. `main` is 79 commits ahead of `origin/main`. **Nothing is pushed until the owner asks**, and
    only after the publishing checklist (task 7).
 
@@ -79,6 +91,21 @@ fast-forward to `main` first.
   - an update test against a local, test-build-only endpoint (a test checks the real build lacks it).
 
 ## Owner decisions (recommended option first)
+
+**Answered by the owner, 2026-11-25: the recommended option for every decision.**
+
+| # | Decision | Owner's choice |
+|---|---|---|
+| 1 | Installer | (a) per-machine NSIS into Program Files, helper inside |
+| 2 | Updates in V1 | (a) yes, the Tauri updater with the owner's signing key (new crate dependency approved) |
+| 3 | Where releases are built and signed | (a) on the owner's PC with `./release.ps1`; no key in GitHub or CI |
+| 4 | Where the private key lives | `%LOCALAPPDATA%\ByteBroom-signing\`, password-protected, plus an offline backup |
+| 5 | When the app checks | (a) at start, and it asks before installing |
+| 6 | The repo | (a) public, after the publishing checklist passes |
+| 7 | First version | (a) `1.0.0` |
+| 8 | On uninstall | (a) keep `%LOCALAPPDATA%\ByteBroom` |
+
+The options as they were offered:
 
 1. **Installer:**
    - (a) **per-machine NSIS into Program Files, with the helper inside (recommended):** one UAC
