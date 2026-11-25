@@ -14,6 +14,12 @@ the user chooses one action: Recycle Bin, permanent delete, or move to another d
 | Amber | Personal files (large/duplicate finder, Downloads, old installers), code projects, keys and vaults, leftovers of removed apps | Never pre-ticked | Extra confirm listing every amber item |
 | Red | Windows, Program Files, pagefile/hiberfil/swapfile, restore points, Windows Update store, Recycle Bin contents | Never listed as files | Admin rights and a typed confirm; freed only through Windows' own tools |
 
+Default action, changeable per item (owner's decision, 2026-11-25, `docs/phase3-plan.md`):
+
+- **Green:** permanent delete. These are rebuilt by Windows or the app, and recycling them on the same
+  drive frees nothing until the bin is emptied.
+- **Amber:** the Recycle Bin.
+
 Users: the owner on their own PC first, then other people who download it from GitHub Releases.
 
 ## Tech stack
@@ -121,7 +127,7 @@ pub fn check_target(target: &ResolvedPath, policy: &Policy) -> Result<Tier, Refu
 | # | Phase | Proves | Result |
 |---|---|---|---|
 | 1 | **Safe delete engine** (core crate only, no UI) | Deletions can't escape their root, links are refused, and the Recycle Bin, permanent delete and move all work and can be checked independently | Done 2026-11-25: 79 tests, security review fixed, owner's Recycle Bin check passed |
-| 2 | **Scanner and tier rules** | The scan finds the green, amber and red categories on fake trees, sizes them correctly and doesn't follow links; a full scan of a large tree is fast enough | — |
+| 2 | **Scanner and tier rules** | The scan finds the green, amber and red categories on fake trees, sizes them correctly and doesn't follow links; a full scan of a large tree is fast enough | Done 2026-11-25: read-only scan tool, security review fixed, owner's totals matched Windows; real scan 175.5 s |
 | 3 | **Window (unelevated)** | Scan → list → per-item action → preview → confirm, in a Tauri window; UI designer pass with fake data | — |
 | 4 | **Elevation and the red tier** | Relaunch through UAC on demand; red tier through DISM / `powercfg` / emptying the Recycle Bin; harness, review, restore point and recovery recipe first | — |
 | 5 | **Undo and history** | Undo a move from the journal; show recycled items and how to restore them | — |
