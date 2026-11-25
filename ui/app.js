@@ -598,6 +598,27 @@
     }
   }
 
+  // ---- Browser behaviour this window doesn't have ---------------------------------------------
+  // It is an app, not a web page: no browser menu (Back, Refresh, Save as, Print) and no reload,
+  // print or find keys, which would wipe the list and ticks mid-task. The filter box keeps its
+  // own menu (cut, copy, paste). Owner's real test, phase 3.
+  document.addEventListener("contextmenu", (e) => {
+    if (!(e.target instanceof HTMLInputElement && e.target.type !== "checkbox")) e.preventDefault();
+  });
+  document.addEventListener("keydown", (e) => {
+    const k = e.key.toLowerCase();
+    const ctrl = e.ctrlKey || e.metaKey;
+    const blocked =
+      k === "f5" ||
+      k === "browserrefresh" ||
+      (ctrl && ["r", "p", "s", "f", "g", "u", "j"].includes(k)) ||
+      (ctrl && e.shiftKey && ["i", "c"].includes(k)) ||
+      (e.altKey && (k === "arrowleft" || k === "arrowright")) ||
+      k === "browserback" ||
+      k === "browserforward";
+    if (blocked) e.preventDefault();
+  });
+
   // ---- Wiring ------------------------------------------------------------------------------
 
   $("scan").addEventListener("click", startScan);

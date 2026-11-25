@@ -339,6 +339,17 @@ fn clean_asks_in_rust_before_acting_on_amber_items() {
     assert!(body.contains("if !yes"), "a no stops the clean");
 }
 
+/// Owner's real test: the browser's own menu (Back, Refresh, Print) and reload keys wiped the
+/// window's list mid-task. The page blocks them.
+#[test]
+fn the_window_has_no_browser_menu_or_reload_keys() {
+    let app = fs::read_to_string(crate_dir().join("..").join("ui").join("app.js")).unwrap();
+    assert!(app.contains("addEventListener(\"contextmenu\""));
+    for key in ["\"f5\"", "\"r\"", "\"p\"", "\"arrowleft\""] {
+        assert!(app.contains(key), "app.js does not block {key}");
+    }
+}
+
 /// The UI harness (tools/ui-harness) fakes the commands in a browser; none of it may reach the
 /// app. The app has no Cargo features at all, so no build can switch fake data on, and the
 /// window's files never name the harness.
