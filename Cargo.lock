@@ -66,6 +66,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "bytebroom-scan"
+version = "0.1.0"
+dependencies = [
+ "bytebroom-core",
+]
+
+[[package]]
 name = "bytes"
 version = "1.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -9,8 +9,14 @@ in full to every change.
 
 ## Run, test, lint, build
 
-Not chosen yet: the toolchain is decided in the interview. Fill this in with exact commands in phase 1,
-and keep the README's commands in step (a docs-drift test checks them).
+Rust workspace: `crates/core` (safety core, delete engine, scanner) and `crates/scan` (read-only scan
+tool). Keep the README's commands in step (a docs-drift test checks them).
+
+- All checks: `./check.ps1` (format check, clippy with `-D warnings`, `cargo test --workspace`,
+  `cargo deny check`).
+- Read-only scan tool: `cargo run --release -p bytebroom-scan` (only the owner runs it on the real PC).
+- Speed test (ignored by default, writes 200,000 files to temp):
+  `cargo test --release -p bytebroom-core --test speed -- --ignored --nocapture`.
 
 ## Safety rules (write these as tests early)
 

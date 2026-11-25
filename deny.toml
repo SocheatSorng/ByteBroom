@@ -27,6 +27,9 @@ unused-allowed-license = "allow"
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# The scan tool depends on the core crate by path, inside this repo; neither is published. Wildcard
+# versions from crates.io stay denied.
+allow-wildcard-paths = true
 
 [sources]
 # Only crates.io; no git dependencies or other registries.

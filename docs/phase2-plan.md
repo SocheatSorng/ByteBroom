@@ -156,7 +156,7 @@ Each task: code → tests → fmt + clippy → full tests → commit with a "why
   - Not needed now; if a real drive is too slow, merge the scan's two passes over the profile (the
     large-file and duplicate search, then the build-folder search) into one, before anything
     lower-level.
-- [ ] **9. Read-only scan tool**
+- [x] **9. Read-only scan tool**
   - Acceptance: `cargo run --release -p bytebroom-scan` prints the totals for each category and
     tier, the 20 largest findings and how many folders it could not read.
   - It has no delete, move or recycle option at all. A test checks that the binary links no engine

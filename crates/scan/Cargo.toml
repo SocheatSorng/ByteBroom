@@ -1,0 +1,15 @@
+[package]
+name = "bytebroom-scan"
+description = "ByteBroom's read-only scan tool: prints what a scan finds and changes nothing."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+bytebroom-core = { path = "../core" }

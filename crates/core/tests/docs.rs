@@ -74,6 +74,8 @@ fn files_named_in_the_docs_exist() {
         "docs/spec.md",
         "docs/intent/bytebroom.md",
         "docs/phase1-plan.md",
+        "docs/phase2-plan.md",
+        "crates/scan/Cargo.toml",
     ] {
         assert!(
             repo_root().join(rel).exists(),
@@ -155,4 +157,29 @@ fn readme_never_listed_names_match_the_rules() {
     from_code.sort();
     from_readme.sort();
     assert_eq!(from_readme, from_code);
+}
+
+#[test]
+fn the_scan_tool_the_readme_names_exists() {
+    let readme = read("README.md");
+    assert!(readme.contains("`cargo run --release -p bytebroom-scan`"));
+    let manifest = read("crates/scan/Cargo.toml");
+    assert!(manifest.contains("name = \"bytebroom-scan\""));
+    let workspace = read("Cargo.toml");
+    assert!(workspace.contains("\"crates/scan\""));
+    // CLAUDE.md names the same commands.
+    let claude = read("CLAUDE.md");
+    for command in [
+        "./check.ps1",
+        "cargo run --release -p bytebroom-scan",
+        "cargo test --release -p bytebroom-core --test speed -- --ignored --nocapture",
+    ] {
+        assert!(claude.contains(command), "CLAUDE.md lacks {command}");
+    }
+    let speed = read("crates/core/tests/speed.rs");
+    assert!(
+        speed.contains(
+            "cargo test --release -p bytebroom-core --test speed -- --ignored --nocapture"
+        )
+    );
 }

@@ -15,6 +15,7 @@ pub mod red;
 pub mod relocate;
 pub mod rules;
 pub mod scan;
+pub mod summary;
 pub mod walk;
 pub mod win;
 
